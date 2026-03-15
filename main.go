@@ -16,6 +16,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// version is set at build time via -ldflags "-X main.version=..."
+var version = "dev"
+
 // --- Types ---------------------------------------------------------------
 
 type match struct {
@@ -436,6 +439,7 @@ ASCII controls, zero-width Unicode, bidi overrides, variation selectors
 By default, scans all files except the .git directory. Use --skip and
 --skip-ext to exclude paths; skipped entries are listed in the output
 as a reminder that coverage is incomplete.`,
+		Version:       version,
 		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
