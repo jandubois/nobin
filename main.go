@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/spf13/cobra"
 )
 
@@ -221,26 +222,19 @@ func scanFile(path string, opts scanOpts) *fileResult {
 
 // matchesSkip checks whether a relative path matches any skip pattern.
 //
-// Three pattern forms are supported:
-//   - Simple (no separator): matched against each individual path component.
-//     "vendor" matches "a/vendor/b".
-//   - Path with "**": recursive glob. "**" matches zero or more directories.
-//     "pkg/**/fonts/**/*.woff*" matches at any depth.
-//   - Path without "**": matched as a glob against the full relative path,
-//     then as a literal prefix. "resources/icons" matches
-//     "resources/icons/logo.svg".
+// Patterns without a path separator are matched against each individual
+// path component (e.g. "vendor" matches "a/vendor/b"). Patterns with a
+// separator are matched against the full relative path using doublestar
+// glob syntax: **, *, ?, [class], and {alt1,alt2} are all supported.
+// A pattern without wildcards also matches as a path prefix, so
+// "resources/icons" matches "resources/icons/logo.svg".
 func matchesSkip(relPath string, patterns []string) (bool, string) {
 	sep := string(filepath.Separator)
 	components := strings.Split(relPath, sep)
 	for _, p := range patterns {
-		switch {
-		case strings.Contains(p, "**"):
-			if matchDoublestar(relPath, p) {
-				return true, p
-			}
-		case strings.Contains(p, sep):
-			// Path pattern: match against full relative path.
-			if matched, _ := filepath.Match(p, relPath); matched {
+		if strings.Contains(p, sep) || strings.Contains(p, "**") {
+			// Path pattern: full doublestar match.
+			if matched, _ := doublestar.PathMatch(p, relPath); matched {
 				return true, p
 			}
 			// Prefix match: "dir/sub" matches "dir/sub/file.txt".
@@ -251,55 +245,16 @@ func matchesSkip(relPath string, patterns []string) (bool, string) {
 			if strings.HasPrefix(relPath, prefix) || relPath == strings.TrimSuffix(p, sep) {
 				return true, p
 			}
-		default:
+		} else {
 			// Simple pattern: match against any single path component.
 			for _, c := range components {
-				if matched, _ := filepath.Match(p, c); matched {
+				if matched, _ := doublestar.PathMatch(p, c); matched {
 					return true, p
 				}
 			}
 		}
 	}
 	return false, ""
-}
-
-// matchDoublestar matches a path against a pattern containing "**".
-// "**" matches zero or more path components.
-func matchDoublestar(path, pattern string) bool {
-	sep := string(filepath.Separator)
-	return matchParts(
-		strings.Split(pattern, sep),
-		strings.Split(path, sep),
-	)
-}
-
-func matchParts(patParts, pathParts []string) bool {
-	for len(patParts) > 0 {
-		if patParts[0] == "**" {
-			rest := patParts[1:]
-			// "**" at end of pattern matches everything.
-			if len(rest) == 0 {
-				return true
-			}
-			// Try matching the rest against every suffix of the path.
-			for i := 0; i <= len(pathParts); i++ {
-				if matchParts(rest, pathParts[i:]) {
-					return true
-				}
-			}
-			return false
-		}
-		if len(pathParts) == 0 {
-			return false
-		}
-		matched, _ := filepath.Match(patParts[0], pathParts[0])
-		if !matched {
-			return false
-		}
-		patParts = patParts[1:]
-		pathParts = pathParts[1:]
-	}
-	return len(pathParts) == 0
 }
 
 // hasSkippedExt checks whether a filename ends with one of the given

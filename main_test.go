@@ -331,6 +331,12 @@ func TestMatchesSkip(t *testing.T) {
 		// Standalone **
 		{"anything/at/all.txt", []string{"**"}, true},
 		{"file.txt", []string{"**"}, true},
+
+		// Alternation {alt1,alt2}
+		{"font.woff", []string{"*.{woff,woff2}"}, true},
+		{"font.woff2", []string{"*.{woff,woff2}"}, true},
+		{"font.ttf", []string{"*.{woff,woff2}"}, false},
+		{"assets/font.woff", []string{"**/*.{woff,woff2}"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
