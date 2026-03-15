@@ -303,6 +303,34 @@ func TestMatchesSkip(t *testing.T) {
 		// Path patterns — glob matching
 		{"resources/foo.bin", []string{"resources/*"}, true},
 		{"resources/sub/foo.bin", []string{"resources/*"}, false},
+
+		// Doublestar patterns
+		{"pkg/assets/fonts/sub/font.woff2", []string{"pkg/assets/fonts/**/*.woff2"}, true},
+		{"pkg/assets/fonts/font.woff2", []string{"pkg/assets/fonts/**/*.woff2"}, true},
+		{"pkg/assets/fonts/a/b/c/font.woff2", []string{"pkg/assets/fonts/**/*.woff2"}, true},
+		{"pkg/assets/fonts/font.ttf", []string{"pkg/assets/fonts/**/*.woff2"}, false},
+		{"other/fonts/font.woff2", []string{"pkg/assets/fonts/**/*.woff2"}, false},
+
+		// ** at end matches everything below
+		{"vendor/pkg/foo.go", []string{"vendor/**"}, true},
+		{"vendor/a/b/c.go", []string{"vendor/**"}, true},
+		{"vendor", []string{"vendor/**"}, true},
+		{"src/vendor/foo.go", []string{"vendor/**"}, false},
+
+		// ** at start matches at any depth
+		{"a/b/c/test/foo.go", []string{"**/test/*.go"}, true},
+		{"test/foo.go", []string{"**/test/*.go"}, true},
+		{"test/sub/foo.go", []string{"**/test/*.go"}, false},
+
+		// ** in the middle
+		{"src/pkg/internal/util.go", []string{"src/**/internal/*.go"}, true},
+		{"src/internal/util.go", []string{"src/**/internal/*.go"}, true},
+		{"src/a/b/c/internal/util.go", []string{"src/**/internal/*.go"}, true},
+		{"other/internal/util.go", []string{"src/**/internal/*.go"}, false},
+
+		// Standalone **
+		{"anything/at/all.txt", []string{"**"}, true},
+		{"file.txt", []string{"**"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
