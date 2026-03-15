@@ -71,6 +71,7 @@ nobin --allow-escape ./my-repo
 
 ```
       --all                include .git directory (excluded by default)
+      --allow-emoji        allow VS15/VS16 (U+FE0E, U+FE0F) emoji presentation selectors
       --allow-escape       allow ESC (0x1B) for ANSI terminal sequences
       --diff string        scan only files changed since BASE (branch, tag, or commit)
       --gitignore          respect .gitignore rules
@@ -83,11 +84,23 @@ nobin --allow-escape ./my-repo
 ### Skip patterns
 
 The `--skip` flag matches glob patterns against path components relative
-to the scan root.
+to the scan root. Supported wildcards:
+
+| Syntax | Meaning |
+|---|---|
+| `*` | Any sequence of non-separator characters |
+| `**` | Zero or more directories |
+| `?` | Any single character |
+| `[class]` | Character class (`[a-z]`, `[^abc]` or `[!abc]`) |
+| `{a,b}` | Alternation (`*.{woff,woff2}` matches both) |
+
+Examples:
 
 - `--skip vendor` skips any directory or file named "vendor" at any depth.
 - `--skip '*.pb.desc'` skips files ending in `.pb.desc`.
 - `--skip resources/icons` skips the `resources/icons` subtree.
+- `--skip '**/*.{woff,woff2}'` skips woff and woff2 files at any depth.
+- `--skip 'pkg/**/fonts/**'` skips everything under any `fonts` directory below `pkg`.
 
 Skipped entries appear in the output so you know coverage is incomplete.
 

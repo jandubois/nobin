@@ -467,7 +467,14 @@ ASCII controls, zero-width Unicode, bidi overrides, variation selectors
 
 By default, scans all files except the .git directory. Use --skip and
 --skip-ext to exclude paths; skipped entries are listed in the output
-as a reminder that coverage is incomplete.`,
+as a reminder that coverage is incomplete.
+
+Skip patterns support glob syntax: * (any non-separator chars),
+** (zero or more directories), ? (single char), [class] (character
+class), and {alt1,alt2} (alternation). For example:
+  --skip 'vendor'                  any component named vendor
+  --skip '**/*.{woff,woff2}'       woff/woff2 files at any depth
+  --skip 'pkg/**/fonts/**'         everything under fonts`,
 		Version:       version,
 		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
