@@ -42,6 +42,7 @@ type skippedEntry struct {
 
 type scanOpts struct {
 	allowEscape bool
+	allowEmoji  bool
 }
 
 // isForbidden returns true for characters that should not appear in source
@@ -68,7 +69,12 @@ func isForbidden(r rune, opts scanOpts) bool {
 	}
 	// Variation Selectors (category Mn — not caught by Cf or Cc).
 	// Used by Glassworm malware to encode invisible payloads.
+	// VS15 (U+FE0E) and VS16 (U+FE0F) are emoji presentation selectors;
+	// --allow-emoji permits these two while still flagging VS1-VS14.
 	if r >= 0xFE00 && r <= 0xFE0F {
+		if opts.allowEmoji && (r == 0xFE0E || r == 0xFE0F) {
+			return false
+		}
 		return true
 	}
 	if r >= 0xE0100 && r <= 0xE01EF {
@@ -424,6 +430,7 @@ func main() {
 		all          bool
 		gitignore    bool
 		allowEscape  bool
+		allowEmoji   bool
 		diffBase     string
 		skipPatterns []string
 		skipExts     []string
@@ -454,6 +461,7 @@ as a reminder that coverage is incomplete.`,
 				all:          all,
 				gitignore:    gitignore,
 				allowEscape:  allowEscape,
+				allowEmoji:   allowEmoji,
 				diffBase:     diffBase,
 				skipPatterns: skipPatterns,
 				skipExts:     skipExts,
@@ -467,6 +475,7 @@ as a reminder that coverage is incomplete.`,
 	f.BoolVar(&all, "all", false, "include .git directory (excluded by default)")
 	f.BoolVar(&gitignore, "gitignore", false, "respect .gitignore rules")
 	f.BoolVar(&allowEscape, "allow-escape", false, "allow ESC (0x1B) for ANSI terminal sequences")
+	f.BoolVar(&allowEmoji, "allow-emoji", false, "allow VS15/VS16 (U+FE0E, U+FE0F) emoji presentation selectors")
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
 	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
 	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")
@@ -483,6 +492,7 @@ type runOpts struct {
 	all          bool
 	gitignore    bool
 	allowEscape  bool
+	allowEmoji   bool
 	diffBase     string
 	skipPatterns []string
 	skipExts     []string
@@ -517,7 +527,7 @@ func run(dir string, opts runOpts) error {
 	ch := make(chan string, workers)
 	resultCh := make(chan *fileResult, workers)
 
-	sopts := scanOpts{allowEscape: opts.allowEscape}
+	sopts := scanOpts{allowEscape: opts.allowEscape, allowEmoji: opts.allowEmoji}
 
 	var wg sync.WaitGroup
 	for range workers {

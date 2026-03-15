@@ -90,6 +90,34 @@ func TestIsForbidden(t *testing.T) {
 			t.Error("ESC should be allowed with allowEscape")
 		}
 	})
+
+	// VS15/VS16 are forbidden by default but allowed with allowEmoji.
+	// VS1-VS14 remain forbidden regardless.
+	t.Run("VS15/default", func(t *testing.T) {
+		if !isForbidden(0xFE0E, scanOpts{}) {
+			t.Error("VS15 should be forbidden by default")
+		}
+	})
+	t.Run("VS16/default", func(t *testing.T) {
+		if !isForbidden(0xFE0F, scanOpts{}) {
+			t.Error("VS16 should be forbidden by default")
+		}
+	})
+	t.Run("VS15/allow-emoji", func(t *testing.T) {
+		if isForbidden(0xFE0E, scanOpts{allowEmoji: true}) {
+			t.Error("VS15 should be allowed with allowEmoji")
+		}
+	})
+	t.Run("VS16/allow-emoji", func(t *testing.T) {
+		if isForbidden(0xFE0F, scanOpts{allowEmoji: true}) {
+			t.Error("VS16 should be allowed with allowEmoji")
+		}
+	})
+	t.Run("VS1/allow-emoji", func(t *testing.T) {
+		if !isForbidden(0xFE00, scanOpts{allowEmoji: true}) {
+			t.Error("VS1 should remain forbidden even with allowEmoji")
+		}
+	})
 }
 
 // --- scanBytes -----------------------------------------------------------
