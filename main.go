@@ -203,14 +203,36 @@ func scanFile(path string) *fileResult {
 
 // --- Skip matching -------------------------------------------------------
 
-// matchesSkip checks whether a path component matches any skip pattern.
-// Patterns are matched as globs against each component of the path.
+// matchesSkip checks whether a relative path matches any skip pattern.
+//
+// Patterns without a path separator are matched against each individual
+// component (e.g. "vendor" matches "a/vendor/b"). Patterns with a path
+// separator are matched against the full relative path: first as a glob
+// via filepath.Match, then as a literal prefix so that "resources/icons"
+// matches "resources/icons/logo.svg".
 func matchesSkip(relPath string, patterns []string) (bool, string) {
-	components := strings.Split(relPath, string(filepath.Separator))
+	sep := string(filepath.Separator)
+	components := strings.Split(relPath, sep)
 	for _, p := range patterns {
-		for _, c := range components {
-			if matched, _ := filepath.Match(p, c); matched {
+		if strings.Contains(p, sep) {
+			// Path pattern: match against full relative path.
+			if matched, _ := filepath.Match(p, relPath); matched {
 				return true, p
+			}
+			// Prefix match: "dir/sub" matches "dir/sub/file.txt".
+			prefix := p
+			if !strings.HasSuffix(prefix, sep) {
+				prefix += sep
+			}
+			if strings.HasPrefix(relPath, prefix) || relPath == strings.TrimSuffix(p, sep) {
+				return true, p
+			}
+		} else {
+			// Simple pattern: match against any single path component.
+			for _, c := range components {
+				if matched, _ := filepath.Match(p, c); matched {
+					return true, p
+				}
 			}
 		}
 	}

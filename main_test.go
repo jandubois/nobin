@@ -243,6 +243,7 @@ func TestMatchesSkip(t *testing.T) {
 		patterns []string
 		want     bool
 	}{
+		// Simple patterns (no path separator)
 		{"vendor/pkg/foo.go", []string{"vendor"}, true},
 		{"src/vendor/foo.go", []string{"vendor"}, true},
 		{"src/main.go", []string{"vendor"}, false},
@@ -252,6 +253,16 @@ func TestMatchesSkip(t *testing.T) {
 		{"node_modules/pkg/index.js", []string{"node_modules"}, true},
 		{"a/b/c.txt", []string{"b"}, true},
 		{"a/b/c.txt", []string{"d"}, false},
+
+		// Path patterns (with separator) — prefix matching
+		{"resources/icons/logo.svg", []string{"resources/icons"}, true},
+		{"resources/icons", []string{"resources/icons"}, true},
+		{"resources", []string{"resources/icons"}, false},
+		{"other/icons/logo.svg", []string{"resources/icons"}, false},
+
+		// Path patterns — glob matching
+		{"resources/foo.bin", []string{"resources/*"}, true},
+		{"resources/sub/foo.bin", []string{"resources/*"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
