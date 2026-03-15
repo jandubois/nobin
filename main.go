@@ -405,19 +405,39 @@ func gitDiffFiles(dir, base string) ([]string, error) {
 }
 
 func gitListFiles(dir string) ([]string, error) {
-	cmd := exec.Command("git", "-C", dir, "ls-files",
-		"--cached", "--others", "--exclude-standard")
-	output, err := cmd.Output()
+	seen := map[string]bool{}
+	var files []string
+
+	addOutput := func(output []byte) {
+		for _, line := range strings.Split(string(output), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				path := filepath.Join(dir, line)
+				if !seen[path] {
+					seen[path] = true
+					files = append(files, path)
+				}
+			}
+		}
+	}
+
+	// Tracked files, including submodules.
+	out, err := exec.Command("git", "-C", dir, "ls-files",
+		"--recurse-submodules").Output()
 	if err != nil {
 		return nil, fmt.Errorf("git ls-files: %w", err)
 	}
-	var files []string
-	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			files = append(files, filepath.Join(dir, line))
-		}
+	addOutput(out)
+
+	// Untracked-but-not-ignored files in the main repo.
+	// (--recurse-submodules does not support --others)
+	out, err = exec.Command("git", "-C", dir, "ls-files",
+		"--others", "--exclude-standard").Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files --others: %w", err)
 	}
+	addOutput(out)
+
 	return files, nil
 }
 
