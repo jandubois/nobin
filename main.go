@@ -25,8 +25,9 @@ type match struct {
 }
 
 type fileResult struct {
-	Path    string
-	Matches []match
+	Path       string
+	Matches    []match
+	MatchCount int // total matches (may exceed len(Matches) due to cap)
 }
 
 type skippedEntry struct {
@@ -125,31 +126,47 @@ func formatReason(r rune) string {
 
 // --- File scanning -------------------------------------------------------
 
+// maxMatchesPerFile caps the number of detailed matches stored per file.
+// Beyond this limit, only the total count is tracked. This prevents
+// multi-gigabyte allocations when scanning large binary files.
+const maxMatchesPerFile = 20
+
 // scanBytes checks content for forbidden characters and invalid UTF-8.
-func scanBytes(data []byte) []match {
+func scanBytes(data []byte) ([]match, int) {
 	var matches []match
+	total := 0
 
 	line := 1
 	col := 1
 	for i := 0; i < len(data); {
 		r, size := utf8.DecodeRune(data[i:])
 
+		hit := false
 		if r == utf8.RuneError && size == 1 {
-			matches = append(matches, match{
-				Line:   line,
-				Col:    col,
-				Reason: fmt.Sprintf("0x%02X invalid UTF-8", data[i]),
-			})
-		} else if isForbidden(r) {
-			reason := formatReason(r)
-			if r == 0xFEFF && i == 0 {
-				reason = "U+FEFF BOM (byte order mark)"
+			hit = true
+			if total < maxMatchesPerFile {
+				matches = append(matches, match{
+					Line:   line,
+					Col:    col,
+					Reason: fmt.Sprintf("0x%02X invalid UTF-8", data[i]),
+				})
 			}
-			matches = append(matches, match{
-				Line:   line,
-				Col:    col,
-				Reason: reason,
-			})
+		} else if isForbidden(r) {
+			hit = true
+			if total < maxMatchesPerFile {
+				reason := formatReason(r)
+				if r == 0xFEFF && i == 0 {
+					reason = "U+FEFF BOM (byte order mark)"
+				}
+				matches = append(matches, match{
+					Line:   line,
+					Col:    col,
+					Reason: reason,
+				})
+			}
+		}
+		if hit {
+			total++
 		}
 
 		if r == '\n' {
@@ -161,7 +178,14 @@ func scanBytes(data []byte) []match {
 		i += size
 	}
 
-	return matches
+	// Append a summary if matches were truncated.
+	if total > maxMatchesPerFile {
+		matches = append(matches, match{
+			Reason: fmt.Sprintf("... and %d more matches", total-maxMatchesPerFile),
+		})
+	}
+
+	return matches, total
 }
 
 func scanFile(path string) *fileResult {
@@ -170,11 +194,11 @@ func scanFile(path string) *fileResult {
 		return nil
 	}
 
-	matches := scanBytes(data)
-	if len(matches) == 0 {
+	matches, total := scanBytes(data)
+	if total == 0 {
 		return nil
 	}
-	return &fileResult{Path: path, Matches: matches}
+	return &fileResult{Path: path, Matches: matches, MatchCount: total}
 }
 
 // --- Skip matching -------------------------------------------------------
@@ -499,7 +523,7 @@ func run(dir string, opts runOpts) error {
 					m.Reason)
 			}
 		default:
-			n := len(r.Matches)
+			n := r.MatchCount
 			label := "matches"
 			if n == 1 {
 				label = "match"

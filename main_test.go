@@ -146,8 +146,8 @@ func TestScanBytes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matches := scanBytes(tt.content)
-			gotMatches := len(matches) > 0
+			matches, total := scanBytes(tt.content)
+			gotMatches := total > 0
 
 			if gotMatches != tt.wantMatches {
 				t.Errorf("scanBytes() returned %d matches, wantMatches=%v",
@@ -177,13 +177,32 @@ func TestScanBytes(t *testing.T) {
 func TestScanBytesPosition(t *testing.T) {
 	// Forbidden char at line 2, col 5
 	content := []byte("abcd\nefgh\xe2\x80\x8bijk\n")
-	matches := scanBytes(content)
-	if len(matches) != 1 {
-		t.Fatalf("expected 1 match, got %d", len(matches))
+	matches, total := scanBytes(content)
+	if total != 1 {
+		t.Fatalf("expected 1 match, got %d", total)
 	}
 	m := matches[0]
 	if m.Line != 2 || m.Col != 5 {
 		t.Errorf("position = %d:%d, want 2:5", m.Line, m.Col)
+	}
+}
+
+// --- scanBytes: truncation -----------------------------------------------
+
+func TestScanBytesTruncation(t *testing.T) {
+	// Build a file with 100 null bytes — well over maxMatchesPerFile.
+	data := make([]byte, 100)
+	matches, total := scanBytes(data)
+	if total != 100 {
+		t.Errorf("total = %d, want 100", total)
+	}
+	if len(matches) != maxMatchesPerFile+1 {
+		t.Errorf("len(matches) = %d, want %d (cap + summary)",
+			len(matches), maxMatchesPerFile+1)
+	}
+	last := matches[len(matches)-1]
+	if !strings.Contains(last.Reason, "more matches") {
+		t.Errorf("last match should be truncation summary, got: %s", last.Reason)
 	}
 }
 
