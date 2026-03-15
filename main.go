@@ -454,7 +454,7 @@ as a reminder that coverage is incomplete.`,
 	f.BoolVar(&all, "all", false, "include .git directory (excluded by default)")
 	f.BoolVar(&gitignore, "gitignore", false, "respect .gitignore rules")
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
-	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob pattern (repeatable)")
+	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
 	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")
 
 	if err := rootCmd.Execute(); err != nil {
