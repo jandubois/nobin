@@ -1,32 +1,20 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/spf13/cobra"
 )
-
-// --- Configuration -------------------------------------------------------
-
-// Default binary-extension filter. Files matching this pattern are skipped.
-var defaultSkipExtRE = regexp.MustCompile(
-	`(?i)\.(png|jpe?g|gif|bmp|ico|webp|tiff?|pdf|eps|ps|` +
-		`woff2?|ttf|otf|eot|mp[34]|avi|mov|mkv|flv|wav|ogg|flac|aac|` +
-		`zip|gz|bz2|xz|zst|lz4|tar|rar|7z|jar|war|ear|` +
-		`whl|gem|deb|rpm|apk|dmg|iso|img|` +
-		`bin|exe|dll|so|dylib|o|a|lib|` +
-		`pyc|pyo|class|wasm|sqlite|db|mdb|` +
-		`DS_Store|mo|pot|pb\.desc)$`)
 
 // --- Types ---------------------------------------------------------------
 
@@ -39,6 +27,11 @@ type match struct {
 type fileResult struct {
 	Path    string
 	Matches []match
+}
+
+type skippedEntry struct {
+	Path   string
+	Reason string
 }
 
 // --- Unicode detection ---------------------------------------------------
@@ -184,6 +177,35 @@ func scanFile(path string) *fileResult {
 	return &fileResult{Path: path, Matches: matches}
 }
 
+// --- Skip matching -------------------------------------------------------
+
+// matchesSkip checks whether a path component matches any skip pattern.
+// Patterns are matched as globs against each component of the path.
+func matchesSkip(relPath string, patterns []string) (bool, string) {
+	components := strings.Split(relPath, string(filepath.Separator))
+	for _, p := range patterns {
+		for _, c := range components {
+			if matched, _ := filepath.Match(p, c); matched {
+				return true, p
+			}
+		}
+	}
+	return false, ""
+}
+
+// hasSkippedExt checks whether a filename ends with one of the given
+// extensions (case-insensitive, without leading dot).
+func hasSkippedExt(path string, exts []string) (bool, string) {
+	lower := strings.ToLower(path)
+	for _, ext := range exts {
+		suffix := "." + strings.ToLower(ext)
+		if strings.HasSuffix(lower, suffix) {
+			return true, ext
+		}
+	}
+	return false, ""
+}
+
 // --- File listing --------------------------------------------------------
 
 func isGitRepo(dir string) bool {
@@ -194,53 +216,76 @@ func isGitRepo(dir string) bool {
 	return cmd.Run() == nil
 }
 
-func listFiles(dir, diffBase string, useGitignore bool, skipExtRE *regexp.Regexp) ([]string, error) {
-	var raw []string
+type fileListResult struct {
+	Files   []string
+	Skipped []skippedEntry
+}
+
+type listOpts struct {
+	diffBase     string
+	all          bool
+	gitignore    bool
+	skipPatterns []string
+	skipExts     []string
+}
+
+func listFiles(dir string, opts listOpts) (*fileListResult, error) {
+	result := &fileListResult{}
 
 	switch {
-	case diffBase != "":
-		cmd := exec.Command("git", "-C", dir, "diff",
-			"--name-only", "--diff-filter=ACMR", diffBase, "--")
-		output, err := cmd.Output()
+	case opts.diffBase != "":
+		files, err := gitDiffFiles(dir, opts.diffBase)
 		if err != nil {
-			return nil, fmt.Errorf("git diff: %w", err)
+			return nil, err
 		}
-		for _, line := range strings.Split(string(output), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				raw = append(raw, filepath.Join(dir, line))
-			}
-		}
+		result.Files, result.Skipped = applyFilters(files, dir, opts)
 
-	case useGitignore && isGitRepo(dir):
-		cmd := exec.Command("git", "-C", dir, "ls-files",
-			"--cached", "--others", "--exclude-standard")
-		output, err := cmd.Output()
+	case opts.gitignore && isGitRepo(dir):
+		files, err := gitListFiles(dir)
 		if err != nil {
-			return nil, fmt.Errorf("git ls-files: %w", err)
+			return nil, err
 		}
-		for _, line := range strings.Split(string(output), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				raw = append(raw, filepath.Join(dir, line))
-			}
-		}
+		result.Files, result.Skipped = applyFilters(files, dir, opts)
 
 	default:
 		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				return nil // skip unreadable entries
+				return nil
 			}
 			if d.IsDir() {
 				name := d.Name()
-				if name == ".git" || name == "node_modules" || name == "__pycache__" {
+				if name == ".git" && !opts.all {
+					return filepath.SkipDir
+				}
+				relPath, _ := filepath.Rel(dir, path)
+				if matched, pattern := matchesSkip(relPath, opts.skipPatterns); matched {
+					result.Skipped = append(result.Skipped, skippedEntry{
+						Path:   path + "/",
+						Reason: fmt.Sprintf("--skip %s", pattern),
+					})
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if d.Type().IsRegular() {
-				raw = append(raw, path)
+			if !d.Type().IsRegular() {
+				return nil
 			}
+			relPath, _ := filepath.Rel(dir, path)
+			if matched, pattern := matchesSkip(relPath, opts.skipPatterns); matched {
+				result.Skipped = append(result.Skipped, skippedEntry{
+					Path:   path,
+					Reason: fmt.Sprintf("--skip %s", pattern),
+				})
+				return nil
+			}
+			if matched, ext := hasSkippedExt(path, opts.skipExts); matched {
+				result.Skipped = append(result.Skipped, skippedEntry{
+					Path:   path,
+					Reason: fmt.Sprintf("--skip-ext %s", ext),
+				})
+				return nil
+			}
+			result.Files = append(result.Files, path)
 			return nil
 		})
 		if err != nil {
@@ -248,10 +293,27 @@ func listFiles(dir, diffBase string, useGitignore bool, skipExtRE *regexp.Regexp
 		}
 	}
 
-	// Filter by extension and skip non-regular files.
+	return result, nil
+}
+
+func applyFilters(raw []string, dir string, opts listOpts) ([]string, []skippedEntry) {
 	var files []string
+	var skipped []skippedEntry
+
 	for _, f := range raw {
-		if skipExtRE != nil && skipExtRE.MatchString(f) {
+		relPath, _ := filepath.Rel(dir, f)
+		if matched, pattern := matchesSkip(relPath, opts.skipPatterns); matched {
+			skipped = append(skipped, skippedEntry{
+				Path:   f,
+				Reason: fmt.Sprintf("--skip %s", pattern),
+			})
+			continue
+		}
+		if matched, ext := hasSkippedExt(f, opts.skipExts); matched {
+			skipped = append(skipped, skippedEntry{
+				Path:   f,
+				Reason: fmt.Sprintf("--skip-ext %s", ext),
+			})
 			continue
 		}
 		info, err := os.Lstat(f)
@@ -260,71 +322,133 @@ func listFiles(dir, diffBase string, useGitignore bool, skipExtRE *regexp.Regexp
 		}
 		files = append(files, f)
 	}
+	return files, skipped
+}
+
+func gitDiffFiles(dir, base string) ([]string, error) {
+	cmd := exec.Command("git", "-C", dir, "diff",
+		"--name-only", "--diff-filter=ACMR", base, "--")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git diff: %w", err)
+	}
+	var files []string
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, filepath.Join(dir, line))
+		}
+	}
+	return files, nil
+}
+
+func gitListFiles(dir string) ([]string, error) {
+	cmd := exec.Command("git", "-C", dir, "ls-files",
+		"--cached", "--others", "--exclude-standard")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files: %w", err)
+	}
+	var files []string
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, filepath.Join(dir, line))
+		}
+	}
 	return files, nil
 }
 
 // --- Main ----------------------------------------------------------------
 
 func main() {
-	diffBase := flag.String("diff", "", "scan only files changed since `BASE` (branch, tag, or commit)")
-	quiet := flag.Bool("quiet", false, "print only file paths")
-	verbose := flag.Bool("verbose", false, "show line, column, and code point for each match")
-	skipExt := flag.String("skip-ext", "", "override the binary-extension filter (`REGEXP`)")
-	noSkipExt := flag.Bool("no-skip-ext", false, "disable extension filtering; scan all files")
-	noGitignore := flag.Bool("no-gitignore", false, "scan all files, ignoring .gitignore")
+	var (
+		quiet        bool
+		verbose      bool
+		all          bool
+		gitignore    bool
+		diffBase     string
+		skipPatterns []string
+		skipExts     []string
+	)
 
-	flag.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: nobin [OPTIONS] [DIRECTORY]
+	rootCmd := &cobra.Command{
+		Use:   "nobin [directory]",
+		Short: "Scan for non-printable and invisible characters",
+		Long: `Scan a directory for files containing non-printable or invisible characters:
+ASCII controls, zero-width Unicode, bidi overrides, variation selectors
+(Glassworm-style), private-use area, and invalid UTF-8.
 
-Scan DIRECTORY (default: current directory) for files containing non-printable
-or invisible characters: ASCII controls, zero-width Unicode, bidi overrides,
-variation selectors (Glassworm-style), private-use area, and invalid UTF-8.
-
-Options:
-`)
-		flag.PrintDefaults()
+By default, scans all files except the .git directory. Use --skip and
+--skip-ext to exclude paths; skipped entries are listed in the output
+as a reminder that coverage is incomplete.`,
+		Args:          cobra.MaximumNArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) > 0 {
+				dir = args[0]
+			}
+			return run(dir, runOpts{
+				quiet:        quiet,
+				verbose:      verbose,
+				all:          all,
+				gitignore:    gitignore,
+				diffBase:     diffBase,
+				skipPatterns: skipPatterns,
+				skipExts:     skipExts,
+			})
+		},
 	}
-	flag.Parse()
 
-	dir := "."
-	if flag.NArg() > 0 {
-		dir = flag.Arg(0)
+	f := rootCmd.Flags()
+	f.BoolVarP(&quiet, "quiet", "q", false, "print only file paths with issues")
+	f.BoolVarP(&verbose, "verbose", "v", false, "show line, column, and code point for each match")
+	f.BoolVar(&all, "all", false, "include .git directory (excluded by default)")
+	f.BoolVar(&gitignore, "gitignore", false, "respect .gitignore rules")
+	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
+	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob pattern (repeatable)")
+	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")
+
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "nobin: %v\n", err)
+		os.Exit(1)
 	}
+}
 
-	// Validate directory.
+type runOpts struct {
+	quiet        bool
+	verbose      bool
+	all          bool
+	gitignore    bool
+	diffBase     string
+	skipPatterns []string
+	skipExts     []string
+}
+
+func run(dir string, opts runOpts) error {
 	info, err := os.Stat(dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nobin: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	if !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "nobin: %s is not a directory\n", dir)
-		os.Exit(1)
+		return fmt.Errorf("%s is not a directory", dir)
 	}
 
-	// Build skip-extension regex.
-	var skipExtRE *regexp.Regexp
-	if !*noSkipExt {
-		if *skipExt != "" {
-			skipExtRE, err = regexp.Compile(*skipExt)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "nobin: invalid --skip-ext pattern: %v\n", err)
-				os.Exit(1)
-			}
-		} else {
-			skipExtRE = defaultSkipExtRE
-		}
-	}
-
-	// List files.
-	files, err := listFiles(dir, *diffBase, !*noGitignore, skipExtRE)
+	lr, err := listFiles(dir, listOpts{
+		diffBase:     opts.diffBase,
+		all:          opts.all,
+		gitignore:    opts.gitignore,
+		skipPatterns: opts.skipPatterns,
+		skipExts:     opts.skipExts,
+	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nobin: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	if !*quiet {
-		fmt.Fprintf(os.Stderr, "Scanning %s (%d files) ...\n", dir, len(files))
+	if !opts.quiet {
+		fmt.Fprintf(os.Stderr, "Scanning %s (%d files) ...\n", dir, len(lr.Files))
 	}
 
 	// Scan files in parallel.
@@ -346,7 +470,7 @@ Options:
 	}
 
 	go func() {
-		for _, f := range files {
+		for _, f := range lr.Files {
 			ch <- f
 		}
 		close(ch)
@@ -363,12 +487,12 @@ Options:
 		return results[i].Path < results[j].Path
 	})
 
-	// Output.
+	// Output issues.
 	for _, r := range results {
 		switch {
-		case *quiet:
+		case opts.quiet:
 			fmt.Println(r.Path)
-		case *verbose:
+		case opts.verbose:
 			for _, m := range r.Matches {
 				fmt.Printf("%-50s  %s\n",
 					fmt.Sprintf("%s:%d:%d", r.Path, m.Line, m.Col),
@@ -384,12 +508,25 @@ Options:
 		}
 	}
 
-	if !*quiet {
+	// Output skipped entries.
+	if !opts.quiet && len(lr.Skipped) > 0 {
+		sort.Slice(lr.Skipped, func(i, j int) bool {
+			return lr.Skipped[i].Path < lr.Skipped[j].Path
+		})
+		fmt.Println()
+		fmt.Println("Skipped:")
+		for _, s := range lr.Skipped {
+			fmt.Printf("  %-58s  %s\n", s.Path, s.Reason)
+		}
+	}
+
+	if !opts.quiet {
 		fmt.Fprintf(os.Stderr, "---\nScanned %d files, found %d with issues.\n",
-			len(files), len(results))
+			len(lr.Files), len(results))
 	}
 
 	if len(results) > 0 {
 		os.Exit(1)
 	}
+	return nil
 }

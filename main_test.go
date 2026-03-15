@@ -216,51 +216,183 @@ func TestScanFile(t *testing.T) {
 	}
 }
 
+// --- matchesSkip ---------------------------------------------------------
+
+func TestMatchesSkip(t *testing.T) {
+	tests := []struct {
+		path     string
+		patterns []string
+		want     bool
+	}{
+		{"vendor/pkg/foo.go", []string{"vendor"}, true},
+		{"src/vendor/foo.go", []string{"vendor"}, true},
+		{"src/main.go", []string{"vendor"}, false},
+		{"foo.pb.desc", []string{"*.pb.desc"}, true},
+		{"src/foo.pb.desc", []string{"*.pb.desc"}, true},
+		{"src/main.go", []string{"*.pb.desc"}, false},
+		{"node_modules/pkg/index.js", []string{"node_modules"}, true},
+		{"a/b/c.txt", []string{"b"}, true},
+		{"a/b/c.txt", []string{"d"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got, _ := matchesSkip(tt.path, tt.patterns)
+			if got != tt.want {
+				t.Errorf("matchesSkip(%q, %v) = %v, want %v",
+					tt.path, tt.patterns, got, tt.want)
+			}
+		})
+	}
+}
+
 // --- listFiles -----------------------------------------------------------
 
-func TestListFilesWalkDir(t *testing.T) {
+func TestListFilesScansEverything(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0644)
 	os.WriteFile(filepath.Join(dir, "b.png"), []byte{0x89, 'P', 'N', 'G'}, 0644)
 	os.MkdirAll(filepath.Join(dir, "sub"), 0755)
 	os.WriteFile(filepath.Join(dir, "sub", "c.js"), []byte("//c\n"), 0644)
 
-	files, err := listFiles(dir, "", false, defaultSkipExtRE)
+	// Default: scans everything (no extension filtering)
+	lr, err := listFiles(dir, listOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Should include a.go and sub/c.js but not b.png.
 	names := map[string]bool{}
-	for _, f := range files {
+	for _, f := range lr.Files {
 		names[filepath.Base(f)] = true
 	}
 	if !names["a.go"] {
-		t.Error("expected a.go in file list")
+		t.Error("expected a.go")
+	}
+	if !names["b.png"] {
+		t.Error("expected b.png (default scans everything)")
 	}
 	if !names["c.js"] {
-		t.Error("expected c.js in file list")
-	}
-	if names["b.png"] {
-		t.Error("b.png should be filtered out")
+		t.Error("expected c.js")
 	}
 }
 
-func TestListFilesSkipsHiddenDirs(t *testing.T) {
+func TestListFilesSkipExt(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "b.png"), []byte{0x89, 'P', 'N', 'G'}, 0644)
+	os.WriteFile(filepath.Join(dir, "c.PNG"), []byte{0x89, 'P', 'N', 'G'}, 0644)
+
+	lr, err := listFiles(dir, listOpts{skipExts: []string{"png"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range lr.Files {
+		base := filepath.Base(f)
+		if base == "b.png" || base == "c.PNG" {
+			t.Errorf("%s should be filtered by --skip-ext", base)
+		}
+	}
+	// Both .png files should appear in skipped
+	count := 0
+	for _, s := range lr.Skipped {
+		if strings.HasSuffix(strings.ToLower(s.Path), ".png") {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Errorf("expected 2 skipped .png files, got %d", count)
+	}
+}
+
+func TestHasSkippedExt(t *testing.T) {
+	tests := []struct {
+		path string
+		exts []string
+		want bool
+	}{
+		{"foo.png", []string{"png"}, true},
+		{"foo.PNG", []string{"png"}, true},
+		{"foo.jpg", []string{"png"}, false},
+		{"foo.tar.gz", []string{"gz"}, true},
+		{"foo.go", []string{"png", "jpg", "gif"}, false},
+		{"foo.JPG", []string{"png", "jpg", "gif"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got, _ := hasSkippedExt(tt.path, tt.exts)
+			if got != tt.want {
+				t.Errorf("hasSkippedExt(%q, %v) = %v, want %v",
+					tt.path, tt.exts, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestListFilesSkipPattern(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "vendor", "pkg"), 0755)
+	os.WriteFile(filepath.Join(dir, "vendor", "pkg", "lib.go"), []byte("package pkg\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0644)
+
+	lr, err := listFiles(dir, listOpts{skipPatterns: []string{"vendor"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range lr.Files {
+		if strings.Contains(f, "vendor") {
+			t.Errorf("vendor files should be skipped, got: %s", f)
+		}
+	}
+	// vendor/ should appear in skipped
+	found := false
+	for _, s := range lr.Skipped {
+		if strings.Contains(s.Path, "vendor") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("vendor should appear in skipped entries")
+	}
+}
+
+func TestListFilesSkipsGitDir(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, ".git", "objects"), 0755)
 	os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[core]\n"), 0644)
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0644)
 
-	files, err := listFiles(dir, "", false, nil)
+	lr, err := listFiles(dir, listOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, f := range files {
+	for _, f := range lr.Files {
 		if strings.Contains(f, ".git") {
 			t.Errorf("should skip .git directory, got: %s", f)
 		}
+	}
+}
+
+func TestListFilesAllIncludesGitDir(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, ".git", "objects"), 0755)
+	os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[core]\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0644)
+
+	lr, err := listFiles(dir, listOpts{all: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, f := range lr.Files {
+		if strings.Contains(f, ".git") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("--all should include .git directory")
 	}
 }
 
@@ -312,35 +444,54 @@ func TestEndToEnd(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "binary.png"),
 		[]byte{0x89, 'P', 'N', 'G', 0x00}, 0644)
 
-	// Run nobin.
-	cmd := exec.Command("go", "run", ".", "--no-gitignore", "--quiet", dir)
+	// Default scans everything (including .png).
+	cmd := exec.Command("go", "run", ".", "--quiet", dir)
 	output, err := cmd.CombinedOutput()
-
-	// Should exit non-zero (issues found).
 	if err == nil {
 		t.Error("expected non-zero exit code")
 	}
 
 	out := string(output)
-
 	if !strings.Contains(out, "dirty.js") {
 		t.Errorf("expected dirty.js in output, got:\n%s", out)
 	}
 	if !strings.Contains(out, "bom.js") {
 		t.Errorf("expected bom.js in output, got:\n%s", out)
 	}
+	if !strings.Contains(out, "binary.png") {
+		t.Errorf("expected binary.png in output (default scans all), got:\n%s", out)
+	}
 	if strings.Contains(out, "clean.js") {
 		t.Errorf("clean.js should not appear in output, got:\n%s", out)
-	}
-	if strings.Contains(out, "binary.png") {
-		t.Errorf("binary.png should be filtered, got:\n%s", out)
 	}
 
 	// Clean-only directory should exit 0.
 	cleanDir := t.TempDir()
 	os.WriteFile(filepath.Join(cleanDir, "ok.txt"), []byte("hello\n"), 0644)
-	cmd = exec.Command("go", "run", ".", "--no-gitignore", "--quiet", cleanDir)
+	cmd = exec.Command("go", "run", ".", "--quiet", cleanDir)
 	if err := cmd.Run(); err != nil {
 		t.Errorf("clean directory should exit 0: %v", err)
+	}
+}
+
+func TestEndToEndSkip(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "vendor"), 0755)
+	os.WriteFile(filepath.Join(dir, "vendor", "lib.go"),
+		[]byte("package lib\x00\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main.go"),
+		[]byte("package main\n"), 0644)
+
+	// Skip vendor — should not report vendor/lib.go as an issue.
+	cmd := exec.Command("go", "run", ".", "--skip", "vendor", "--quiet", dir)
+	output, _ := cmd.CombinedOutput()
+	out := string(output)
+
+	if strings.Contains(out, "vendor") {
+		t.Errorf("vendor should be skipped, got:\n%s", out)
 	}
 }
