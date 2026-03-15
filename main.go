@@ -37,11 +37,18 @@ type skippedEntry struct {
 
 // --- Unicode detection ---------------------------------------------------
 
+type scanOpts struct {
+	allowEscape bool
+}
+
 // isForbidden returns true for characters that should not appear in source
 // code: control characters (except tab/LF/CR), Unicode format characters
 // (zero-width, bidi overrides), private-use area, and variation selectors.
-func isForbidden(r rune) bool {
+func isForbidden(r rune, opts scanOpts) bool {
 	if r == '\t' || r == '\n' || r == '\r' {
+		return false
+	}
+	if r == 0x1B && opts.allowEscape {
 		return false
 	}
 	// Cc: C0 controls, DEL, C1 controls
@@ -132,7 +139,7 @@ func formatReason(r rune) string {
 const maxMatchesPerFile = 20
 
 // scanBytes checks content for forbidden characters and invalid UTF-8.
-func scanBytes(data []byte) ([]match, int) {
+func scanBytes(data []byte, opts scanOpts) ([]match, int) {
 	var matches []match
 	total := 0
 
@@ -151,7 +158,7 @@ func scanBytes(data []byte) ([]match, int) {
 					Reason: fmt.Sprintf("0x%02X invalid UTF-8", data[i]),
 				})
 			}
-		} else if isForbidden(r) {
+		} else if isForbidden(r, opts) {
 			hit = true
 			if total < maxMatchesPerFile {
 				reason := formatReason(r)
@@ -188,13 +195,13 @@ func scanBytes(data []byte) ([]match, int) {
 	return matches, total
 }
 
-func scanFile(path string) *fileResult {
+func scanFile(path string, opts scanOpts) *fileResult {
 	data, err := os.ReadFile(path)
 	if err != nil || len(data) == 0 {
 		return nil
 	}
 
-	matches, total := scanBytes(data)
+	matches, total := scanBytes(data, opts)
 	if total == 0 {
 		return nil
 	}
@@ -413,6 +420,7 @@ func main() {
 		verbose      bool
 		all          bool
 		gitignore    bool
+		allowEscape  bool
 		diffBase     string
 		skipPatterns []string
 		skipExts     []string
@@ -441,6 +449,7 @@ as a reminder that coverage is incomplete.`,
 				verbose:      verbose,
 				all:          all,
 				gitignore:    gitignore,
+				allowEscape:  allowEscape,
 				diffBase:     diffBase,
 				skipPatterns: skipPatterns,
 				skipExts:     skipExts,
@@ -453,6 +462,7 @@ as a reminder that coverage is incomplete.`,
 	f.BoolVarP(&verbose, "verbose", "v", false, "show line, column, and code point for each match")
 	f.BoolVar(&all, "all", false, "include .git directory (excluded by default)")
 	f.BoolVar(&gitignore, "gitignore", false, "respect .gitignore rules")
+	f.BoolVar(&allowEscape, "allow-escape", false, "allow ESC (0x1B) for ANSI terminal sequences")
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
 	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
 	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")
@@ -468,6 +478,7 @@ type runOpts struct {
 	verbose      bool
 	all          bool
 	gitignore    bool
+	allowEscape  bool
 	diffBase     string
 	skipPatterns []string
 	skipExts     []string
@@ -502,13 +513,15 @@ func run(dir string, opts runOpts) error {
 	ch := make(chan string, workers)
 	resultCh := make(chan *fileResult, workers)
 
+	sopts := scanOpts{allowEscape: opts.allowEscape}
+
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for path := range ch {
-				if r := scanFile(path); r != nil {
+				if r := scanFile(path, sopts); r != nil {
 					resultCh <- r
 				}
 			}

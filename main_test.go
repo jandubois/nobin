@@ -29,7 +29,7 @@ func TestIsForbidden(t *testing.T) {
 	}
 	for _, tt := range allowed {
 		t.Run("allow/"+tt.name, func(t *testing.T) {
-			if isForbidden(tt.r) {
+			if isForbidden(tt.r, scanOpts{}) {
 				t.Errorf("isForbidden(%U) = true, want false", tt.r)
 			}
 		})
@@ -73,11 +73,23 @@ func TestIsForbidden(t *testing.T) {
 	}
 	for _, tt := range forbidden {
 		t.Run("forbid/"+tt.name, func(t *testing.T) {
-			if !isForbidden(tt.r) {
+			if !isForbidden(tt.r, scanOpts{}) {
 				t.Errorf("isForbidden(%U) = false, want true", tt.r)
 			}
 		})
 	}
+
+	// ESC is forbidden by default but allowed with allowEscape.
+	t.Run("ESC/default", func(t *testing.T) {
+		if !isForbidden(0x1B, scanOpts{}) {
+			t.Error("ESC should be forbidden by default")
+		}
+	})
+	t.Run("ESC/allow-escape", func(t *testing.T) {
+		if isForbidden(0x1B, scanOpts{allowEscape: true}) {
+			t.Error("ESC should be allowed with allowEscape")
+		}
+	})
 }
 
 // --- scanBytes -----------------------------------------------------------
@@ -146,7 +158,7 @@ func TestScanBytes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matches, total := scanBytes(tt.content)
+			matches, total := scanBytes(tt.content, scanOpts{})
 			gotMatches := total > 0
 
 			if gotMatches != tt.wantMatches {
@@ -177,7 +189,7 @@ func TestScanBytes(t *testing.T) {
 func TestScanBytesPosition(t *testing.T) {
 	// Forbidden char at line 2, col 5
 	content := []byte("abcd\nefgh\xe2\x80\x8bijk\n")
-	matches, total := scanBytes(content)
+	matches, total := scanBytes(content, scanOpts{})
 	if total != 1 {
 		t.Fatalf("expected 1 match, got %d", total)
 	}
@@ -192,7 +204,7 @@ func TestScanBytesPosition(t *testing.T) {
 func TestScanBytesTruncation(t *testing.T) {
 	// Build a file with 100 null bytes — well over maxMatchesPerFile.
 	data := make([]byte, 100)
-	matches, total := scanBytes(data)
+	matches, total := scanBytes(data, scanOpts{})
 	if total != 100 {
 		t.Errorf("total = %d, want 100", total)
 	}
@@ -213,24 +225,24 @@ func TestScanFile(t *testing.T) {
 
 	clean := filepath.Join(dir, "clean.js")
 	os.WriteFile(clean, []byte("const x = 42;\n"), 0644)
-	if r := scanFile(clean); r != nil {
+	if r := scanFile(clean, scanOpts{}); r != nil {
 		t.Errorf("clean file produced %d matches", len(r.Matches))
 	}
 
 	dirty := filepath.Join(dir, "dirty.js")
 	os.WriteFile(dirty, []byte("const x = \"\xe2\x80\x8b\";\n"), 0644)
-	if r := scanFile(dirty); r == nil {
+	if r := scanFile(dirty, scanOpts{}); r == nil {
 		t.Error("dirty file produced no matches")
 	}
 
 	empty := filepath.Join(dir, "empty.txt")
 	os.WriteFile(empty, []byte{}, 0644)
-	if r := scanFile(empty); r != nil {
+	if r := scanFile(empty, scanOpts{}); r != nil {
 		t.Error("empty file should produce no matches")
 	}
 
 	missing := filepath.Join(dir, "missing.txt")
-	if r := scanFile(missing); r != nil {
+	if r := scanFile(missing, scanOpts{}); r != nil {
 		t.Error("missing file should produce no matches")
 	}
 }
