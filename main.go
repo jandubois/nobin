@@ -453,6 +453,7 @@ func main() {
 		gitignore    bool
 		allowEscape  bool
 		allowEmoji   bool
+		hideSkipped  bool
 		diffBase     string
 		skipPatterns []string
 		skipExts     []string
@@ -491,6 +492,7 @@ class), and {alt1,alt2} (alternation). For example:
 				gitignore:    gitignore,
 				allowEscape:  allowEscape,
 				allowEmoji:   allowEmoji,
+				hideSkipped:  hideSkipped,
 				diffBase:     diffBase,
 				skipPatterns: skipPatterns,
 				skipExts:     skipExts,
@@ -505,6 +507,7 @@ class), and {alt1,alt2} (alternation). For example:
 	f.BoolVar(&gitignore, "gitignore", false, "respect .gitignore rules")
 	f.BoolVar(&allowEscape, "allow-escape", false, "allow ESC (0x1B) for ANSI terminal sequences")
 	f.BoolVar(&allowEmoji, "allow-emoji", false, "allow VS15/VS16 (U+FE0E, U+FE0F) emoji presentation selectors")
+	f.BoolVar(&hideSkipped, "hide-skipped", false, "hide the list of skipped files from output")
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
 	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
 	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")
@@ -522,6 +525,7 @@ type runOpts struct {
 	gitignore    bool
 	allowEscape  bool
 	allowEmoji   bool
+	hideSkipped  bool
 	diffBase     string
 	skipPatterns []string
 	skipExts     []string
@@ -611,7 +615,7 @@ func run(dir string, opts runOpts) error {
 	}
 
 	// Output skipped entries.
-	if !opts.quiet && len(lr.Skipped) > 0 {
+	if !opts.quiet && !opts.hideSkipped && len(lr.Skipped) > 0 {
 		sort.Slice(lr.Skipped, func(i, j int) bool {
 			return lr.Skipped[i].Path < lr.Skipped[j].Path
 		})
