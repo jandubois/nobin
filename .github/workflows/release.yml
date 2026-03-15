@@ -72,3 +72,12 @@ jobs:
           files: |
             nobin-*
           body: ${{ steps.tag.outputs.body }}
+
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          jq -n --arg v "$VERSION" \
+            '{event_type: "update-formula", client_payload: {formula: "nobin", version: $v}}' |
+            gh api repos/jandubois/homebrew-tap/dispatches --input -
