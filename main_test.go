@@ -1,0 +1,346 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// --- isForbidden ---------------------------------------------------------
+
+func TestIsForbidden(t *testing.T) {
+	allowed := []struct {
+		name string
+		r    rune
+	}{
+		{"tab", '\t'},
+		{"LF", '\n'},
+		{"CR", '\r'},
+		{"space", ' '},
+		{"printable ASCII a", 'a'},
+		{"printable ASCII tilde", '~'},
+		{"accented e", 'é'},
+		{"emoji thumbs up", '👍'},
+		{"CJK character", '中'},
+		{"Arabic letter", 'ع'},
+	}
+	for _, tt := range allowed {
+		t.Run("allow/"+tt.name, func(t *testing.T) {
+			if isForbidden(tt.r) {
+				t.Errorf("isForbidden(%U) = true, want false", tt.r)
+			}
+		})
+	}
+
+	forbidden := []struct {
+		name string
+		r    rune
+	}{
+		// C0 controls
+		{"NULL", 0x00},
+		{"BEL", 0x07},
+		{"BS", 0x08},
+		{"VT", 0x0B},
+		{"FF", 0x0C},
+		{"ESC", 0x1B},
+		{"DEL", 0x7F},
+		// C1 controls
+		{"NEL", 0x85},
+		{"SS2", 0x8E},
+		{"CSI", 0x9B},
+		// Zero-width / format (Cf)
+		{"ZERO WIDTH SPACE", 0x200B},
+		{"ZERO WIDTH NON-JOINER", 0x200C},
+		{"ZERO WIDTH JOINER", 0x200D},
+		{"LRO", 0x202D},
+		{"RLO", 0x202E},
+		{"WORD JOINER", 0x2060},
+		{"RLI", 0x2067},
+		{"ZWNBSP", 0xFEFF},
+		{"SOFT HYPHEN", 0xAD},
+		// Private Use Area
+		{"PUA start", 0xE000},
+		{"PUA end", 0xF8FF},
+		{"PUA-A", 0xF0000},
+		// Variation Selectors
+		{"VS1", 0xFE00},
+		{"VS16", 0xFE0F},
+		{"VS17", 0xE0100},
+		{"VS256", 0xE01EF},
+	}
+	for _, tt := range forbidden {
+		t.Run("forbid/"+tt.name, func(t *testing.T) {
+			if !isForbidden(tt.r) {
+				t.Errorf("isForbidden(%U) = false, want true", tt.r)
+			}
+		})
+	}
+}
+
+// --- scanBytes -----------------------------------------------------------
+
+func TestScanBytes(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     []byte
+		wantMatches bool
+		wantReasons []string // substrings that must appear in at least one reason
+	}{
+		// Clean files
+		{"clean ASCII", []byte("hello world\n"), false, nil},
+		{"clean UTF-8 accents", []byte("const x = \"\xc3\xa9l\xc3\xa8ve\";\n"), false, nil},
+		{"clean emoji", []byte("# Comment with emoji \xf0\x9f\x91\x8d\n"), false, nil},
+		{"clean newlines", []byte("line one\nline two\n"), false, nil},
+		{"clean tabs", []byte("col1\tcol2\tcol3\n"), false, nil},
+		{"clean CRLF", []byte("line\r\nwindows\r\n"), false, nil},
+		{"empty", []byte{}, false, nil},
+
+		// ASCII controls
+		{"NUL", []byte("a\x00b\n"), true, []string{"U+0000", "NULL"}},
+		{"BEL", []byte("a\x07b\n"), true, []string{"U+0007", "BELL"}},
+		{"BS", []byte("a\x08b\n"), true, []string{"U+0008", "BACKSPACE"}},
+		{"VT", []byte("a\x0bb\n"), true, []string{"U+000B", "VERTICAL TAB"}},
+		{"FF", []byte("a\x0cb\n"), true, []string{"U+000C", "FORM FEED"}},
+		{"ESC", []byte("a\x1b[31mb\n"), true, []string{"U+001B", "ESCAPE"}},
+		{"DEL", []byte("a\x7fb\n"), true, []string{"U+007F", "DELETE"}},
+
+		// C1 controls
+		{"NEL", []byte("a\xc2\x85b\n"), true, []string{"U+0085", "NEXT LINE"}},
+		{"SS2", []byte("a\xc2\x8eb\n"), true, []string{"U+008E", "CONTROL"}},
+
+		// Zero-width / format (Cf)
+		{"ZWSP", []byte("hello\xe2\x80\x8bworld\n"), true, []string{"U+200B", "ZERO WIDTH SPACE"}},
+		{"ZWNJ", []byte("foo\xe2\x80\x8cbar\n"), true, []string{"U+200C", "ZERO WIDTH NON-JOINER"}},
+		{"ZWJ", []byte("foo\xe2\x80\x8dbar\n"), true, []string{"U+200D", "ZERO WIDTH JOINER"}},
+		{"WORD JOINER", []byte("foo\xe2\x81\xa0bar\n"), true, []string{"U+2060", "WORD JOINER"}},
+		{"FEFF mid-file", []byte("x\xef\xbb\xbfy\n"), true, []string{"U+FEFF", "ZERO WIDTH NO-BREAK SPACE"}},
+
+		// Bidi overrides
+		{"LRO", []byte("a\xe2\x80\xadb\n"), true, []string{"U+202D"}},
+		{"RLO", []byte("a\xe2\x80\xaeb\xe2\x80\xacc\n"), true, []string{"U+202E"}},
+		{"RLI", []byte("a\xe2\x81\xa7b\n"), true, []string{"U+2067"}},
+
+		// Private Use Area
+		{"PUA BMP", []byte("a\xee\x80\x80b\n"), true, []string{"U+E000", "PRIVATE USE"}},
+		{"PUA Supp-A", []byte("a\xf3\xb0\x80\x80b\n"), true, []string{"PRIVATE USE"}},
+
+		// Variation Selectors (Glassworm)
+		{"VS1", []byte("a\xef\xb8\x80b\n"), true, []string{"U+FE00", "VARIATION SELECTOR-1"}},
+		{"VS16", []byte("a\xef\xb8\x8fb\n"), true, []string{"U+FE0F", "VARIATION SELECTOR-16"}},
+		{"VS17", []byte("a\xf3\xa0\x84\x80b\n"), true, []string{"U+E0100", "VARIATION SELECTOR-17"}},
+		{"VS256", []byte("a\xf3\xa0\x87\xafb\n"), true, []string{"U+E01EF", "VARIATION SELECTOR-256"}},
+
+		// BOM
+		{"BOM at start", []byte("\xef\xbb\xbfhello\n"), true, []string{"BOM"}},
+
+		// Invalid UTF-8
+		{"invalid UTF-8", []byte("a\xff\xfeb\n"), true, []string{"invalid UTF-8"}},
+
+		// Mixed
+		{"multiple issues", []byte("a\xe2\x80\x8bb\xe2\x80\xaec\xee\x80\x80d\n"), true,
+			[]string{"U+200B", "U+202E", "U+E000"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matches := scanBytes(tt.content)
+			gotMatches := len(matches) > 0
+
+			if gotMatches != tt.wantMatches {
+				t.Errorf("scanBytes() returned %d matches, wantMatches=%v",
+					len(matches), tt.wantMatches)
+				for _, m := range matches {
+					t.Logf("  line %d col %d: %s", m.Line, m.Col, m.Reason)
+				}
+				return
+			}
+
+			// Verify expected reasons appear.
+			allReasons := ""
+			for _, m := range matches {
+				allReasons += m.Reason + "\n"
+			}
+			for _, want := range tt.wantReasons {
+				if !strings.Contains(allReasons, want) {
+					t.Errorf("expected %q in reasons, got:\n%s", want, allReasons)
+				}
+			}
+		})
+	}
+}
+
+// --- scanBytes: line/column tracking -------------------------------------
+
+func TestScanBytesPosition(t *testing.T) {
+	// Forbidden char at line 2, col 5
+	content := []byte("abcd\nefgh\xe2\x80\x8bijk\n")
+	matches := scanBytes(content)
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	m := matches[0]
+	if m.Line != 2 || m.Col != 5 {
+		t.Errorf("position = %d:%d, want 2:5", m.Line, m.Col)
+	}
+}
+
+// --- scanFile (integration) ----------------------------------------------
+
+func TestScanFile(t *testing.T) {
+	dir := t.TempDir()
+
+	clean := filepath.Join(dir, "clean.js")
+	os.WriteFile(clean, []byte("const x = 42;\n"), 0644)
+	if r := scanFile(clean); r != nil {
+		t.Errorf("clean file produced %d matches", len(r.Matches))
+	}
+
+	dirty := filepath.Join(dir, "dirty.js")
+	os.WriteFile(dirty, []byte("const x = \"\xe2\x80\x8b\";\n"), 0644)
+	if r := scanFile(dirty); r == nil {
+		t.Error("dirty file produced no matches")
+	}
+
+	empty := filepath.Join(dir, "empty.txt")
+	os.WriteFile(empty, []byte{}, 0644)
+	if r := scanFile(empty); r != nil {
+		t.Error("empty file should produce no matches")
+	}
+
+	missing := filepath.Join(dir, "missing.txt")
+	if r := scanFile(missing); r != nil {
+		t.Error("missing file should produce no matches")
+	}
+}
+
+// --- listFiles -----------------------------------------------------------
+
+func TestListFilesWalkDir(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "b.png"), []byte{0x89, 'P', 'N', 'G'}, 0644)
+	os.MkdirAll(filepath.Join(dir, "sub"), 0755)
+	os.WriteFile(filepath.Join(dir, "sub", "c.js"), []byte("//c\n"), 0644)
+
+	files, err := listFiles(dir, "", false, defaultSkipExtRE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should include a.go and sub/c.js but not b.png.
+	names := map[string]bool{}
+	for _, f := range files {
+		names[filepath.Base(f)] = true
+	}
+	if !names["a.go"] {
+		t.Error("expected a.go in file list")
+	}
+	if !names["c.js"] {
+		t.Error("expected c.js in file list")
+	}
+	if names["b.png"] {
+		t.Error("b.png should be filtered out")
+	}
+}
+
+func TestListFilesSkipsHiddenDirs(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, ".git", "objects"), 0755)
+	os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[core]\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0644)
+
+	files, err := listFiles(dir, "", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range files {
+		if strings.Contains(f, ".git") {
+			t.Errorf("should skip .git directory, got: %s", f)
+		}
+	}
+}
+
+// --- runeDescription -----------------------------------------------------
+
+func TestRuneDescription(t *testing.T) {
+	tests := []struct {
+		r    rune
+		want string
+	}{
+		{0x00, "NULL"},
+		{0x1B, "ESCAPE"},
+		{0x200B, "ZERO WIDTH SPACE"},
+		{0x202E, "RIGHT-TO-LEFT OVERRIDE"},
+		{0xFE00, "VARIATION SELECTOR-1"},
+		{0xFE0F, "VARIATION SELECTOR-16"},
+		{0xE0100, "VARIATION SELECTOR-17"},
+		{0xE01EF, "VARIATION SELECTOR-256"},
+		{0xE000, "PRIVATE USE"},
+		{0x03, "CONTROL"},
+		{0x90, "CONTROL"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("U+%04X", tt.r), func(t *testing.T) {
+			got := runeDescription(tt.r)
+			if got != tt.want {
+				t.Errorf("runeDescription(%U) = %q, want %q", tt.r, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- End-to-end (via go run) ---------------------------------------------
+
+func TestEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+
+	// Create clean and dirty files.
+	os.WriteFile(filepath.Join(dir, "clean.js"),
+		[]byte("const x = 42;\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "dirty.js"),
+		[]byte("const x = \"\xe2\x80\x8b\";\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "bom.js"),
+		[]byte("\xef\xbb\xbfconst y = 1;\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "binary.png"),
+		[]byte{0x89, 'P', 'N', 'G', 0x00}, 0644)
+
+	// Run nobin.
+	cmd := exec.Command("go", "run", ".", "--no-gitignore", "--quiet", dir)
+	output, err := cmd.CombinedOutput()
+
+	// Should exit non-zero (issues found).
+	if err == nil {
+		t.Error("expected non-zero exit code")
+	}
+
+	out := string(output)
+
+	if !strings.Contains(out, "dirty.js") {
+		t.Errorf("expected dirty.js in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "bom.js") {
+		t.Errorf("expected bom.js in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "clean.js") {
+		t.Errorf("clean.js should not appear in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "binary.png") {
+		t.Errorf("binary.png should be filtered, got:\n%s", out)
+	}
+
+	// Clean-only directory should exit 0.
+	cleanDir := t.TempDir()
+	os.WriteFile(filepath.Join(cleanDir, "ok.txt"), []byte("hello\n"), 0644)
+	cmd = exec.Command("go", "run", ".", "--no-gitignore", "--quiet", cleanDir)
+	if err := cmd.Run(); err != nil {
+		t.Errorf("clean directory should exit 0: %v", err)
+	}
+}
