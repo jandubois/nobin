@@ -22,7 +22,7 @@ and encoding errors.
 ## Install
 
 ```
-go install nobin@latest
+go install github.com/jandubois/nobin@latest
 ```
 
 Or build from source:

@@ -1,4 +1,4 @@
-module nobin
+module github.com/jandubois/nobin
 
 go 1.25
 
