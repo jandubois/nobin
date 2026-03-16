@@ -15,11 +15,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/jandubois/nobin/version"
 	"github.com/spf13/cobra"
 )
-
-// version is set at build time via -ldflags "-X main.version=..."
-var version = "dev"
 
 // parseCodePoint parses a Unicode code point from a hex string.
 // Accepts "U+FEFF", "u+feff", "0xFEFF", "0xfeff", "FEFF", or "feff".
@@ -493,7 +491,7 @@ class), and {alt1,alt2} (alternation). For example:
   --skip 'vendor'                  any component named vendor
   --skip '**/*.{woff,woff2}'       woff/woff2 files at any depth
   --skip 'pkg/**/fonts/**'         everything under fonts`,
-		Version:       version,
+		Version:       version.Version,
 		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
