@@ -80,19 +80,38 @@ func TestIsForbidden(t *testing.T) {
 	}
 
 	// ESC is forbidden by default but allowed with allowEscape.
+	// allowRunes suppresses specific code points.
+	allow := func(runes ...rune) scanOpts {
+		m := map[rune]bool{}
+		for _, r := range runes {
+			m[r] = true
+		}
+		return scanOpts{allowRunes: m}
+	}
+
 	t.Run("ESC/default", func(t *testing.T) {
 		if !isForbidden(0x1B, scanOpts{}) {
 			t.Error("ESC should be forbidden by default")
 		}
 	})
-	t.Run("ESC/allow-escape", func(t *testing.T) {
-		if isForbidden(0x1B, scanOpts{allowEscape: true}) {
-			t.Error("ESC should be allowed with allowEscape")
+	t.Run("ESC/allowed", func(t *testing.T) {
+		if isForbidden(0x1B, allow(0x1B)) {
+			t.Error("ESC should be allowed via allowRunes")
 		}
 	})
 
-	// VS15/VS16 are forbidden by default but allowed with allowEmoji.
-	// VS1-VS14 remain forbidden regardless.
+	t.Run("BEL/default", func(t *testing.T) {
+		if !isForbidden(0x07, scanOpts{}) {
+			t.Error("BEL should be forbidden by default")
+		}
+	})
+	t.Run("BEL/allowed", func(t *testing.T) {
+		if isForbidden(0x07, allow(0x07)) {
+			t.Error("BEL should be allowed via allowRunes")
+		}
+	})
+
+	// VS15/VS16 allowed via allowRunes; VS1 remains forbidden.
 	t.Run("VS15/default", func(t *testing.T) {
 		if !isForbidden(0xFE0E, scanOpts{}) {
 			t.Error("VS15 should be forbidden by default")
@@ -103,21 +122,84 @@ func TestIsForbidden(t *testing.T) {
 			t.Error("VS16 should be forbidden by default")
 		}
 	})
-	t.Run("VS15/allow-emoji", func(t *testing.T) {
-		if isForbidden(0xFE0E, scanOpts{allowEmoji: true}) {
-			t.Error("VS15 should be allowed with allowEmoji")
+	t.Run("VS15+VS16/allowed", func(t *testing.T) {
+		opts := allow(0xFE0E, 0xFE0F)
+		if isForbidden(0xFE0E, opts) {
+			t.Error("VS15 should be allowed")
+		}
+		if isForbidden(0xFE0F, opts) {
+			t.Error("VS16 should be allowed")
+		}
+		if !isForbidden(0xFE00, opts) {
+			t.Error("VS1 should remain forbidden")
 		}
 	})
-	t.Run("VS16/allow-emoji", func(t *testing.T) {
-		if isForbidden(0xFE0F, scanOpts{allowEmoji: true}) {
-			t.Error("VS16 should be allowed with allowEmoji")
-		}
-	})
-	t.Run("VS1/allow-emoji", func(t *testing.T) {
-		if !isForbidden(0xFE00, scanOpts{allowEmoji: true}) {
-			t.Error("VS1 should remain forbidden even with allowEmoji")
-		}
-	})
+}
+
+// --- parseCodePoint ------------------------------------------------------
+
+func TestParseCodePoint(t *testing.T) {
+	tests := []struct {
+		input string
+		want  rune
+	}{
+		{"FEFF", 0xFEFF},
+		{"feff", 0xFEFF},
+		{"0xFEFF", 0xFEFF},
+		{"0xfeff", 0xFEFF},
+		{"U+FEFF", 0xFEFF},
+		{"u+feff", 0xFEFF},
+		{"7", 0x07},
+		{"1B", 0x1B},
+		{"0x1b", 0x1B},
+		{"U+200B", 0x200B},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseCodePoint(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("parseCodePoint(%q) = %U, want %U", tt.input, got, tt.want)
+			}
+		})
+	}
+
+	// Error cases
+	for _, bad := range []string{"", "ZZZZ", "U+FFFFFFFFFF"} {
+		t.Run("err/"+bad, func(t *testing.T) {
+			_, err := parseCodePoint(bad)
+			if err == nil {
+				t.Error("expected error")
+			}
+		})
+	}
+}
+
+// --- scanBytes: BOM with allowBom ----------------------------------------
+
+func TestScanBytesBomAllowed(t *testing.T) {
+	bom := []byte("\xef\xbb\xbfhello\n")
+
+	// Default: BOM flagged
+	_, total := scanBytes(bom, scanOpts{})
+	if total != 1 {
+		t.Errorf("BOM should be flagged by default, got %d matches", total)
+	}
+
+	// With allowBom: BOM at start suppressed
+	_, total = scanBytes(bom, scanOpts{allowBom: true})
+	if total != 0 {
+		t.Errorf("BOM at start should be allowed with allowBom, got %d matches", total)
+	}
+
+	// Mid-file FEFF still flagged even with allowBom
+	mid := []byte("x\xef\xbb\xbfy\n")
+	_, total = scanBytes(mid, scanOpts{allowBom: true})
+	if total != 1 {
+		t.Errorf("mid-file FEFF should still be flagged, got %d matches", total)
+	}
 }
 
 // --- scanBytes -----------------------------------------------------------

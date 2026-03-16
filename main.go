@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -19,6 +20,21 @@ import (
 
 // version is set at build time via -ldflags "-X main.version=..."
 var version = "dev"
+
+// parseCodePoint parses a Unicode code point from a hex string.
+// Accepts "U+FEFF", "u+feff", "0xFEFF", "0xfeff", "FEFF", or "feff".
+func parseCodePoint(s string) (rune, error) {
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "U+"), "u+")
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X")
+	n, err := strconv.ParseUint(s, 16, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid code point %q: expected hex like U+FEFF, 0xFEFF, or FEFF", s)
+	}
+	if n > unicode.MaxRune {
+		return 0, fmt.Errorf("code point %q exceeds Unicode maximum (U+10FFFF)", s)
+	}
+	return rune(n), nil
+}
 
 // --- Types ---------------------------------------------------------------
 
@@ -42,8 +58,8 @@ type skippedEntry struct {
 // --- Unicode detection ---------------------------------------------------
 
 type scanOpts struct {
-	allowEscape bool
-	allowEmoji  bool
+	allowBom   bool
+	allowRunes map[rune]bool
 }
 
 // isForbidden returns true for characters that should not appear in source
@@ -53,7 +69,7 @@ func isForbidden(r rune, opts scanOpts) bool {
 	if r == '\t' || r == '\n' || r == '\r' {
 		return false
 	}
-	if r == 0x1B && opts.allowEscape {
+	if opts.allowRunes[r] {
 		return false
 	}
 	// Cc: C0 controls, DEL, C1 controls
@@ -70,12 +86,7 @@ func isForbidden(r rune, opts scanOpts) bool {
 	}
 	// Variation Selectors (category Mn — not caught by Cf or Cc).
 	// Used by Glassworm malware to encode invisible payloads.
-	// VS15 (U+FE0E) and VS16 (U+FE0F) are emoji presentation selectors;
-	// --allow-emoji permits these two while still flagging VS1-VS14.
 	if r >= 0xFE00 && r <= 0xFE0F {
-		if opts.allowEmoji && (r == 0xFE0E || r == 0xFE0F) {
-			return false
-		}
 		return true
 	}
 	if r >= 0xE0100 && r <= 0xE01EF {
@@ -168,6 +179,8 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int) {
 					Reason: fmt.Sprintf("0x%02X invalid UTF-8", data[i]),
 				})
 			}
+		} else if r == 0xFEFF && i == 0 && opts.allowBom {
+			// BOM at file start — explicitly allowed.
 		} else if isForbidden(r, opts) {
 			hit = true
 			if total < maxMatchesPerFile {
@@ -447,16 +460,19 @@ func gitListFiles(dir string) ([]string, error) {
 
 func main() {
 	var (
-		quiet        bool
-		verbose      bool
-		all          bool
-		gitignore    bool
-		allowEscape  bool
-		allowEmoji   bool
-		hideSkipped  bool
-		diffBase     string
-		skipPatterns []string
-		skipExts     []string
+		quiet          bool
+		verbose        bool
+		all            bool
+		gitignore      bool
+		allowEscape    bool
+		allowEmoji     bool
+		allowBom       bool
+		allowBell      bool
+		hideSkipped    bool
+		diffBase       string
+		skipPatterns   []string
+		skipExts       []string
+		allowCodePts   []string
 	)
 
 	rootCmd := &cobra.Command{
@@ -464,7 +480,8 @@ func main() {
 		Short: "Scan for non-printable and invisible characters",
 		Long: `Scan a directory for files containing non-printable or invisible characters:
 ASCII controls, zero-width Unicode, bidi overrides, variation selectors
-(Glassworm-style), private-use area, and invalid UTF-8.
+(Glassworm-style), private-use area, and invalid UTF-8. All files are
+assumed to be UTF-8; other encodings are reported as invalid.
 
 By default, scans all files except the .git directory. Use --skip and
 --skip-ext to exclude paths; skipped entries are listed in the output
@@ -485,13 +502,36 @@ class), and {alt1,alt2} (alternation). For example:
 			if len(args) > 0 {
 				dir = args[0]
 			}
+			allowRunes := map[rune]bool{}
+			// ESC (0x1B): used in ANSI terminal control sequences
+			if allowEscape {
+				allowRunes[0x1B] = true
+			}
+			// BEL (0x07): used by some terminal protocols
+			if allowBell {
+				allowRunes[0x07] = true
+			}
+			// VS15 (U+FE0E) and VS16 (U+FE0F): emoji presentation selectors.
+			// Other variation selectors (VS1-VS14, supplement) remain
+			// forbidden as they are used by Glassworm to encode payloads.
+			if allowEmoji {
+				allowRunes[0xFE0E] = true
+				allowRunes[0xFE0F] = true
+			}
+			for _, s := range allowCodePts {
+				r, err := parseCodePoint(s)
+				if err != nil {
+					return err
+				}
+				allowRunes[r] = true
+			}
 			return run(dir, runOpts{
+				allowBom:     allowBom,
+				allowRunes:   allowRunes,
 				quiet:        quiet,
 				verbose:      verbose,
 				all:          all,
 				gitignore:    gitignore,
-				allowEscape:  allowEscape,
-				allowEmoji:   allowEmoji,
 				hideSkipped:  hideSkipped,
 				diffBase:     diffBase,
 				skipPatterns: skipPatterns,
@@ -505,8 +545,11 @@ class), and {alt1,alt2} (alternation). For example:
 	f.BoolVarP(&verbose, "verbose", "v", false, "show line, column, and code point for each match")
 	f.BoolVar(&all, "all", false, "include .git directory (excluded by default)")
 	f.BoolVar(&gitignore, "gitignore", false, "respect .gitignore rules")
-	f.BoolVar(&allowEscape, "allow-escape", false, "allow ESC (0x1B) for ANSI terminal sequences")
+	f.BoolVar(&allowBell, "allow-bell", false, "allow BEL (0x07)")
+	f.BoolVar(&allowBom, "allow-bom", false, "allow UTF-8 BOM at the start of files")
 	f.BoolVar(&allowEmoji, "allow-emoji", false, "allow VS15/VS16 (U+FE0E, U+FE0F) emoji presentation selectors")
+	f.BoolVar(&allowEscape, "allow-escape", false, "allow ESC (0x1B) for ANSI terminal sequences")
+	f.StringArrayVar(&allowCodePts, "allow", nil, "allow a specific code point, as hex: U+FEFF, 0xFEFF, or FEFF (repeatable)")
 	f.BoolVar(&hideSkipped, "hide-skipped", false, "hide the list of skipped files from output")
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
 	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
@@ -523,8 +566,8 @@ type runOpts struct {
 	verbose      bool
 	all          bool
 	gitignore    bool
-	allowEscape  bool
-	allowEmoji   bool
+	allowBom     bool
+	allowRunes   map[rune]bool
 	hideSkipped  bool
 	diffBase     string
 	skipPatterns []string
@@ -560,7 +603,7 @@ func run(dir string, opts runOpts) error {
 	ch := make(chan string, workers)
 	resultCh := make(chan *fileResult, workers)
 
-	sopts := scanOpts{allowEscape: opts.allowEscape, allowEmoji: opts.allowEmoji}
+	sopts := scanOpts{allowBom: opts.allowBom, allowRunes: opts.allowRunes}
 
 	var wg sync.WaitGroup
 	for range workers {

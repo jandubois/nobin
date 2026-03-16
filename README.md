@@ -37,6 +37,11 @@ go build -o nobin .
 nobin [directory] [flags]
 ```
 
+nobin assumes all text files are UTF-8. Files in other encodings
+(ISO-8859, UTF-16, etc.) will be reported as containing invalid UTF-8
+bytes — this is intentional, since non-UTF-8 source files are
+themselves a problem worth catching.
+
 By default, nobin scans every file under the given directory (or the
 current directory), excluding only `.git`. It exits 0 if all files are
 clean, 1 if any issues are found.
