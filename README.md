@@ -75,15 +75,19 @@ nobin --allow-escape ./my-repo
 ### Flags
 
 ```
-      --all                include .git directory (excluded by default)
-      --allow-emoji        allow VS15/VS16 (U+FE0E, U+FE0F) emoji presentation selectors
-      --allow-escape       allow ESC (0x1B) for ANSI terminal sequences
-      --diff string        scan only files changed since BASE (branch, tag, or commit)
-      --gitignore          respect .gitignore rules
-  -q, --quiet              print only file paths with issues
-      --skip PATTERN       skip paths matching glob PATTERN relative to scan root (repeatable)
-      --skip-ext strings   skip files with these extensions (comma-separated, without dot)
-  -v, --verbose            show line, column, and code point for each match
+      --all                 include .git directory (excluded by default)
+      --allow stringArray   allow a specific code point, as hex: U+FEFF, 0xFEFF, or FEFF (repeatable)
+      --allow-bell          allow BEL (0x07)
+      --allow-bom           allow UTF-8 BOM at the start of files
+      --allow-emoji         allow VS15/VS16 (U+FE0E, U+FE0F) emoji presentation selectors
+      --allow-escape        allow ESC (0x1B) for ANSI terminal sequences
+      --diff string         scan only files changed since BASE (branch, tag, or commit)
+      --gitignore           respect .gitignore rules
+      --hide-skipped        hide the list of skipped files from output
+  -q, --quiet               print only file paths with issues
+      --skip PATTERN        skip paths matching glob PATTERN relative to scan root (repeatable)
+      --skip-ext strings    skip files with these extensions (comma-separated, without dot)
+  -v, --verbose             show line, column, and code point for each match
 ```
 
 ### Skip patterns
