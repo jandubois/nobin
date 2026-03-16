@@ -99,7 +99,7 @@ to the scan root. Supported wildcards:
 | `[class]` | Character class (`[a-z]`, `[^abc]` or `[!abc]`) |
 | `{a,b}` | Alternation (`*.{woff,woff2}` matches both) |
 
-Examples:
+Quote patterns containing wildcards to prevent shell expansion:
 
 - `--skip vendor` skips any directory or file named "vendor" at any depth.
 - `--skip '*.pb.desc'` skips files ending in `.pb.desc`.
