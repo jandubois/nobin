@@ -170,8 +170,7 @@ func isPureHex(s []byte) bool {
 }
 
 // scanBase64 finds contiguous runs of base64 characters that are at least
-// minLen bytes long and not purely hexadecimal. Trailing padding (up to 2
-// '=' characters) counts toward run length.
+// minLen bytes long and not purely hexadecimal.
 func scanBase64(data []byte, minLen int) []match {
 	var matches []match
 	lineNum := 1
@@ -192,17 +191,12 @@ func scanBase64(data []byte, minLen int) []match {
 			for j < len(line) && isBase64Char(line[j]) {
 				j++
 			}
-			bodyEnd := j
-			for pad := 0; pad < 2 && j < len(line) && line[j] == '='; pad++ {
-				j++
-			}
-			body := line[start:bodyEnd]
-			totalLen := j - start
-			if totalLen >= minLen && !isPureHex(body) {
+			run := line[start:j]
+			if len(run) >= minLen && !isPureHex(run) {
 				matches = append(matches, match{
 					Line:   lineNum,
 					Col:    start + 1,
-					Reason: fmt.Sprintf("base64-encoded data (%d chars)", totalLen),
+					Reason: fmt.Sprintf("base64-encoded data (%d chars)", len(run)),
 				})
 			}
 		}

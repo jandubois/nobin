@@ -148,7 +148,7 @@ and a summary of the rest.
 The `--block-base64` flag detects base64-encoded data that might hide
 binary payloads in otherwise text-only files. It scans each line for
 contiguous runs of base64 characters (`A`--`Z`, `a`--`z`, `0`--`9`,
-`+`, `/`) plus up to two `=` padding characters.
+`+`, `/`).
 
 To reduce false positives, strings that contain only hexadecimal
 characters (`0`--`9`, `A`--`F`, `a`--`f`) are ignored. This excludes

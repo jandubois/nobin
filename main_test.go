@@ -253,26 +253,6 @@ func TestScanBase64(t *testing.T) {
 		}
 	})
 
-	t.Run("includes padding in length", func(t *testing.T) {
-		data := []byte(testBase64String(62) + "==\n")
-		matches := scanBase64(data, 64)
-		if len(matches) != 1 {
-			t.Fatalf("expected 1 match with padding, got %d", len(matches))
-		}
-		if !strings.Contains(matches[0].Reason, "64 chars") {
-			t.Errorf("reason should mention 64 chars, got: %s", matches[0].Reason)
-		}
-	})
-
-	t.Run("limits padding to 2", func(t *testing.T) {
-		// 61 base64 chars + "===" — only 2 padding chars counted, total 63
-		data := []byte(testBase64String(61) + "===\n")
-		matches := scanBase64(data, 64)
-		if len(matches) != 0 {
-			t.Errorf("expected 0 matches (only 2 padding chars counted), got %d", len(matches))
-		}
-	})
-
 	t.Run("correct column offset", func(t *testing.T) {
 		data := []byte("prefix " + testBase64String(64) + "\n")
 		matches := scanBase64(data, 64)
