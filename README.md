@@ -162,7 +162,8 @@ See [`nobin.yaml`](nobin.yaml) for a sample file with all defaults.
 The `--block-base64` flag detects base64-encoded data that might hide
 binary payloads in otherwise text-only files. It scans each line for
 contiguous runs of base64 characters (`A`--`Z`, `a`--`z`, `0`--`9`,
-`+`, `/`).
+`+`). The `/` character is excluded because it causes false positives
+on URLs and file paths.
 
 To reduce false positives, two kinds of strings are ignored:
 purely hexadecimal strings (`0`--`9`, `A`--`F`, `a`--`f`), which

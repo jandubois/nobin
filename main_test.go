@@ -14,7 +14,7 @@ import (
 func testBase64String(n int) string {
 	// Interleaves letters with digits so that substrings at any length
 	// are neither pure-hex nor pure-alpha.
-	const alphabet = "SGVsbG8gV29ybGQ0MTIz+/ABCDEFHIJKLMNOPQRSTUWXYZajkmnpqtuvwxiz56789"
+	const alphabet = "SGVsbG8gV29ybGQ0MTIz+ABCDEFHIJKLMNOPQRSTUWXYZajkmnpqtuvwxiz567890"
 	s := strings.Repeat(alphabet, (n/len(alphabet))+1)
 	return s[:n]
 }

@@ -154,11 +154,14 @@ func formatReason(r rune) string {
 
 // --- Base64 detection ----------------------------------------------------
 
+// isBase64Char matches most of the standard base64 alphabet. The /
+// character is intentionally excluded because it causes false positives
+// on URLs and file paths.
 func isBase64Char(b byte) bool {
 	return (b >= 'A' && b <= 'Z') ||
 		(b >= 'a' && b <= 'z') ||
 		(b >= '0' && b <= '9') ||
-		b == '+' || b == '/'
+		b == '+'
 }
 
 func isPureHex(s []byte) bool {
