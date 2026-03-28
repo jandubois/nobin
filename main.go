@@ -173,9 +173,25 @@ func isPureHex(s []byte) bool {
 	return true
 }
 
-func isPureAlpha(s []byte) bool {
-	for _, b := range s {
-		if !((b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')) {
+// isIdentifierLike reports whether s looks like a code identifier:
+// alphabetic characters with at most one contiguous group of digits.
+// Returns false if s contains non-alphanumeric characters (like +).
+func isIdentifierLike(s []byte) bool {
+	digitGroups := 0
+	i := 0
+	for i < len(s) {
+		b := s[i]
+		if b >= '0' && b <= '9' {
+			digitGroups++
+			if digitGroups > 1 {
+				return false
+			}
+			for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+				i++
+			}
+		} else if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') {
+			i++
+		} else {
 			return false
 		}
 	}
@@ -183,7 +199,7 @@ func isPureAlpha(s []byte) bool {
 }
 
 // scanBase64 finds contiguous runs of base64 characters that are at least
-// minLen bytes long, not purely hexadecimal, and not purely alphabetic.
+// minLen bytes long, not purely hexadecimal, and not identifier-like.
 func scanBase64(data []byte, minLen int) []match {
 	var matches []match
 	lineNum := 1
@@ -205,7 +221,7 @@ func scanBase64(data []byte, minLen int) []match {
 				j++
 			}
 			run := line[start:j]
-			if len(run) >= minLen && !isPureHex(run) && !isPureAlpha(run) {
+			if len(run) >= minLen && !isPureHex(run) && !isIdentifierLike(run) {
 				matches = append(matches, match{
 					Line:   lineNum,
 					Col:    start + 1,

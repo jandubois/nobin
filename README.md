@@ -167,10 +167,11 @@ on URLs and file paths.
 
 To reduce false positives, two kinds of strings are ignored:
 purely hexadecimal strings (`0`--`9`, `A`--`F`, `a`--`f`), which
-catches SHA hashes, UUIDs, and similar identifiers; and purely
-alphabetic strings (`A`--`Z`, `a`--`z`), which catches long
-variable names and other plain words. Real base64-encoded binary
-data almost always contains digits, `+`, or `/` mixed with letters.
+catches SHA hashes, UUIDs, and similar identifiers; and
+identifier-like strings, which are alphabetic characters with at
+most one contiguous group of digits (e.g. `TestTable80SameArch`).
+Real base64-encoded binary data scatters digits throughout the
+string, producing multiple digit groups.
 
 The default minimum length is 32 characters. To override, use `=`:
 

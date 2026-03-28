@@ -222,27 +222,35 @@ func TestIsPureHex(t *testing.T) {
 	}
 }
 
-// --- isPureAlpha ---------------------------------------------------------
+// --- isIdentifierLike ----------------------------------------------------
 
-func TestIsPureAlpha(t *testing.T) {
+func TestIsIdentifierLike(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
 		want  bool
 	}{
+		// Pure alpha (zero digit groups)
 		{"lowercase", "abcdefghij", true},
 		{"uppercase", "ABCDEFGHIJ", true},
 		{"mixed case", "HelloWorld", true},
 		{"empty", "", true},
-		{"contains digit", "Hello1World", false},
+		// One digit group
+		{"digits at end", "TestHTTP2", true},
+		{"digits in middle", "TestTable80SameArch", true},
+		{"digits at start", "123TestFunc", true},
+		// Two or more digit groups
+		{"two digit groups", "Test12Blah34", false},
+		{"scattered digits", "a1b2c3", false},
+		// Contains non-alphanumeric
 		{"contains plus", "Hello+World", false},
 		{"contains slash", "Hello/World", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isPureAlpha([]byte(tt.input))
+			got := isIdentifierLike([]byte(tt.input))
 			if got != tt.want {
-				t.Errorf("isPureAlpha(%q) = %v, want %v", tt.input, got, tt.want)
+				t.Errorf("isIdentifierLike(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -286,6 +294,14 @@ func TestScanBase64(t *testing.T) {
 		matches := scanBase64(data, 32)
 		if len(matches) != 0 {
 			t.Errorf("pure alpha should not match, got %d matches", len(matches))
+		}
+	})
+
+	t.Run("skips identifier with one number", func(t *testing.T) {
+		data := []byte("TestPrintInstanceTable80SameArch\n") // 31 alpha + 2 digits = 33 chars
+		matches := scanBase64(data, 32)
+		if len(matches) != 0 {
+			t.Errorf("identifier-like string should not match, got %d matches", len(matches))
 		}
 	})
 
