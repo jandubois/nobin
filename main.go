@@ -17,6 +17,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/jandubois/nobin/version"
 	"github.com/spf13/cobra"
+	"go.yaml.in/yaml/v3"
 )
 
 // parseCodePoint parses a Unicode code point from a hex string.
@@ -519,6 +520,72 @@ func gitListFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
+// --- Configuration -------------------------------------------------------
+
+type config struct {
+	All         bool     `yaml:"all"`
+	Allow       []string `yaml:"allow"`
+	AllowBell   bool     `yaml:"allow-bell"`
+	AllowBom    bool     `yaml:"allow-bom"`
+	AllowEmoji  bool     `yaml:"allow-emoji"`
+	AllowEscape bool     `yaml:"allow-escape"`
+	BlockBase64 int      `yaml:"block-base64"`
+	Gitignore   bool     `yaml:"gitignore"`
+	HideSkipped bool     `yaml:"hide-skipped"`
+	Quiet       bool     `yaml:"quiet"`
+	Skip        []string `yaml:"skip"`
+	SkipExt     []string `yaml:"skip-ext"`
+	Verbose     bool     `yaml:"verbose"`
+}
+
+const configFileName = ".nobin.yaml"
+
+// findConfigFile returns the path to the config file and any error.
+// It checks the explicit path first, then the current directory, then
+// the git repository root.
+func findConfigFile(explicit string) (string, error) {
+	if explicit != "" {
+		if _, err := os.Stat(explicit); err != nil {
+			return "", fmt.Errorf("config file: %w", err)
+		}
+		return explicit, nil
+	}
+
+	if _, err := os.Stat(configFileName); err == nil {
+		return configFileName, nil
+	}
+
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", nil
+	}
+	root := strings.TrimSpace(string(output))
+
+	cwd, err := os.Getwd()
+	if err != nil || root == cwd {
+		return "", nil
+	}
+
+	path := filepath.Join(root, configFileName)
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	return "", nil
+}
+
+func loadConfig(path string) (config, error) {
+	var cfg config
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, err
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return cfg, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
 // --- Main ----------------------------------------------------------------
 
 func main() {
@@ -537,6 +604,7 @@ func main() {
 		skipExts       []string
 		allowCodePts   []string
 		blockBase64Str string
+		configFlag     string
 	)
 
 	rootCmd := &cobra.Command{
@@ -550,6 +618,10 @@ assumed to be UTF-8; other encodings are reported as invalid.
 By default, scans all files except the .git directory. Use --skip and
 --skip-ext to exclude paths; skipped entries are listed in the output
 as a reminder that coverage is incomplete.
+
+Settings can also be placed in a .nobin.yaml config file in the current
+directory or git repository root. Command-line flags override config
+values; list flags (--skip, --skip-ext, --allow) extend the config lists.
 
 Skip patterns support glob syntax: * (any non-separator chars),
 ** (zero or more directories), ? (single char), [class] (character
@@ -566,48 +638,99 @@ class), and {alt1,alt2} (alternation). For example:
 			if len(args) > 0 {
 				dir = args[0]
 			}
+
+			// Load config file.
+			var cfg config
+			cfgPath, err := findConfigFile(configFlag)
+			if err != nil {
+				return err
+			}
+			if cfgPath != "" {
+				cfg, err = loadConfig(cfgPath)
+				if err != nil {
+					return err
+				}
+			}
+
+			// CLI flags override config scalars when explicitly set.
+			if cmd.Flags().Changed("all") {
+				cfg.All = all
+			}
+			if cmd.Flags().Changed("allow-bell") {
+				cfg.AllowBell = allowBell
+			}
+			if cmd.Flags().Changed("allow-bom") {
+				cfg.AllowBom = allowBom
+			}
+			if cmd.Flags().Changed("allow-emoji") {
+				cfg.AllowEmoji = allowEmoji
+			}
+			if cmd.Flags().Changed("allow-escape") {
+				cfg.AllowEscape = allowEscape
+			}
+			if cmd.Flags().Changed("gitignore") {
+				cfg.Gitignore = gitignore
+			}
+			if cmd.Flags().Changed("hide-skipped") {
+				cfg.HideSkipped = hideSkipped
+			}
+			if cmd.Flags().Changed("quiet") {
+				cfg.Quiet = quiet
+			}
+			if cmd.Flags().Changed("verbose") {
+				cfg.Verbose = verbose
+			}
+
+			// CLI lists extend config lists.
+			cfg.Allow = append(cfg.Allow, allowCodePts...)
+			cfg.Skip = append(cfg.Skip, skipPatterns...)
+			cfg.SkipExt = append(cfg.SkipExt, skipExts...)
+
+			// Build the allowed-runes set from merged config.
 			allowRunes := map[rune]bool{}
-			// ESC (0x1B): used in ANSI terminal control sequences
-			if allowEscape {
+			if cfg.AllowEscape {
 				allowRunes[0x1B] = true
 			}
-			// BEL (0x07): used by some terminal protocols
-			if allowBell {
+			if cfg.AllowBell {
 				allowRunes[0x07] = true
 			}
-			// VS15 (U+FE0E) and VS16 (U+FE0F): emoji presentation selectors.
-			// Other variation selectors (VS1-VS14, supplement) remain
-			// forbidden as they are used by Glassworm to encode payloads.
-			if allowEmoji {
+			if cfg.AllowEmoji {
 				allowRunes[0xFE0E] = true
 				allowRunes[0xFE0F] = true
 			}
-			for _, s := range allowCodePts {
+			for _, s := range cfg.Allow {
 				r, err := parseCodePoint(s)
 				if err != nil {
 					return err
 				}
 				allowRunes[r] = true
 			}
-			var blockBase64 int
-			if blockBase64Str != "" {
+
+			// Handle --block-base64 (CLI overrides config when set).
+			blockBase64 := cfg.BlockBase64
+			if cmd.Flags().Changed("block-base64") {
 				n, err := strconv.Atoi(blockBase64Str)
 				if err != nil || n < 1 {
 					return fmt.Errorf("--block-base64: expected positive integer, got %q", blockBase64Str)
 				}
 				blockBase64 = n
 			}
+
+			if cfgPath != "" && !cfg.Quiet {
+				fmt.Fprintf(os.Stderr, "Config: %s\n", cfgPath)
+			}
+
 			return run(dir, runOpts{
-				allowBom:     allowBom,
+				allowBom:     cfg.AllowBom,
 				allowRunes:   allowRunes,
-				quiet:        quiet,
-				verbose:      verbose,
-				all:          all,
-				gitignore:    gitignore,
-				hideSkipped:  hideSkipped,
+				quiet:        cfg.Quiet,
+				verbose:      cfg.Verbose,
+				all:          cfg.All,
+				gitignore:    cfg.Gitignore,
+				hideSkipped:  cfg.HideSkipped,
 				diffBase:     diffBase,
-				skipPatterns: skipPatterns,
-				skipExts:     skipExts,
+				skipPatterns: cfg.Skip,
+				skipExts:     cfg.SkipExt,
 				blockBase64:  blockBase64,
 			})
 		},
@@ -624,6 +747,7 @@ class), and {alt1,alt2} (alternation). For example:
 	f.BoolVar(&allowEscape, "allow-escape", false, "allow ESC (0x1B) for ANSI terminal sequences")
 	f.StringArrayVar(&allowCodePts, "allow", nil, "allow a specific code point, as hex: U+FEFF, 0xFEFF, or FEFF (repeatable)")
 	f.BoolVar(&hideSkipped, "hide-skipped", false, "hide the list of skipped files from output")
+	f.StringVar(&configFlag, "config", "", "path to config file (default: .nobin.yaml in current directory or git root)")
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
 	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
 	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")

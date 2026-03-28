@@ -90,6 +90,7 @@ nobin --block-base64=128 ./my-repo   # require 128+ characters to flag
       --allow-emoji         allow VS15/VS16 (U+FE0E, U+FE0F) emoji presentation selectors
       --allow-escape        allow ESC (0x1B) for ANSI terminal sequences
       --block-base64[=N]    detect base64-encoded strings of N+ characters (default 64)
+      --config string       path to config file (default: .nobin.yaml in current directory or git root)
       --diff string         scan only files changed since BASE (branch, tag, or commit)
       --gitignore           respect .gitignore rules
       --hide-skipped        hide the list of skipped files from output
@@ -142,6 +143,19 @@ Files with more than 20 matches (typically binaries) show the first 20
 and a summary of the rest.
 
 **Quiet** (`-q`) prints only file paths, one per line, for use in scripts.
+
+### Configuration file
+
+nobin reads settings from a `.nobin.yaml` file. It looks in the current
+directory first, then at the git repository root. Use `--config` to
+specify a different path.
+
+All flags except `--diff` and `--config` can be set in the config file.
+Command-line flags override scalar values; list flags (`--skip`,
+`--skip-ext`, `--allow`) extend the config lists rather than replace
+them.
+
+See [`nobin.yaml`](nobin.yaml) for a sample file with all defaults.
 
 ### Base64 detection
 

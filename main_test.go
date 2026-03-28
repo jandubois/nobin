@@ -782,6 +782,298 @@ func TestRuneDescription(t *testing.T) {
 	}
 }
 
+// --- loadConfig ----------------------------------------------------------
+
+func TestLoadConfig(t *testing.T) {
+	t.Run("parses all fields", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "test.yaml")
+		os.WriteFile(path, []byte(`
+all: true
+allow:
+  - "U+FEFF"
+  - "0x1B"
+allow-bell: true
+allow-bom: true
+allow-emoji: true
+allow-escape: true
+block-base64: 128
+gitignore: true
+hide-skipped: true
+quiet: true
+skip:
+  - vendor
+  - node_modules
+skip-ext:
+  - png
+  - jpg
+verbose: true
+`), 0644)
+
+		cfg, err := loadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.All {
+			t.Error("All should be true")
+		}
+		if len(cfg.Allow) != 2 || cfg.Allow[0] != "U+FEFF" {
+			t.Errorf("Allow = %v, want [U+FEFF 0x1B]", cfg.Allow)
+		}
+		if !cfg.AllowBell {
+			t.Error("AllowBell should be true")
+		}
+		if !cfg.AllowBom {
+			t.Error("AllowBom should be true")
+		}
+		if !cfg.AllowEmoji {
+			t.Error("AllowEmoji should be true")
+		}
+		if !cfg.AllowEscape {
+			t.Error("AllowEscape should be true")
+		}
+		if cfg.BlockBase64 != 128 {
+			t.Errorf("BlockBase64 = %d, want 128", cfg.BlockBase64)
+		}
+		if !cfg.Gitignore {
+			t.Error("Gitignore should be true")
+		}
+		if !cfg.HideSkipped {
+			t.Error("HideSkipped should be true")
+		}
+		if !cfg.Quiet {
+			t.Error("Quiet should be true")
+		}
+		if len(cfg.Skip) != 2 || cfg.Skip[0] != "vendor" {
+			t.Errorf("Skip = %v, want [vendor node_modules]", cfg.Skip)
+		}
+		if len(cfg.SkipExt) != 2 || cfg.SkipExt[0] != "png" {
+			t.Errorf("SkipExt = %v, want [png jpg]", cfg.SkipExt)
+		}
+		if !cfg.Verbose {
+			t.Error("Verbose should be true")
+		}
+	})
+
+	t.Run("defaults to zero values", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "empty.yaml")
+		os.WriteFile(path, []byte("{}\n"), 0644)
+
+		cfg, err := loadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.All || cfg.Quiet || cfg.Verbose || cfg.BlockBase64 != 0 {
+			t.Error("empty config should produce zero values")
+		}
+		if len(cfg.Skip) != 0 || len(cfg.SkipExt) != 0 || len(cfg.Allow) != 0 {
+			t.Error("empty config should have empty lists")
+		}
+	})
+
+	t.Run("rejects invalid YAML", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "bad.yaml")
+		os.WriteFile(path, []byte("skip: [missing bracket\n"), 0644)
+
+		_, err := loadConfig(path)
+		if err == nil {
+			t.Error("expected error for invalid YAML")
+		}
+	})
+}
+
+// --- findConfigFile ------------------------------------------------------
+
+func TestFindConfigFile(t *testing.T) {
+	t.Run("explicit path found", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "custom.yaml")
+		os.WriteFile(path, []byte("quiet: true\n"), 0644)
+
+		got, err := findConfigFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != path {
+			t.Errorf("got %q, want %q", got, path)
+		}
+	})
+
+	t.Run("explicit path missing", func(t *testing.T) {
+		_, err := findConfigFile("/nonexistent/path.yaml")
+		if err == nil {
+			t.Error("expected error for missing explicit config")
+		}
+	})
+
+	t.Run("no config returns empty", func(t *testing.T) {
+		dir := t.TempDir()
+		orig, _ := os.Getwd()
+		os.Chdir(dir)
+		defer os.Chdir(orig)
+
+		got, err := findConfigFile("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "" {
+			t.Errorf("expected empty path, got %q", got)
+		}
+	})
+
+	t.Run("finds in current directory", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, ".nobin.yaml"), []byte("quiet: true\n"), 0644)
+		orig, _ := os.Getwd()
+		os.Chdir(dir)
+		defer os.Chdir(orig)
+
+		got, err := findConfigFile("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != ".nobin.yaml" {
+			t.Errorf("got %q, want %q", got, ".nobin.yaml")
+		}
+	})
+}
+
+// --- End-to-end: config file ---------------------------------------------
+
+func TestEndToEndConfig(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "dirty.js"),
+		[]byte("const x = \"\xe2\x80\x8b\";\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "clean.js"),
+		[]byte("const x = 42;\n"), 0644)
+
+	cfgPath := filepath.Join(dir, ".nobin.yaml")
+	os.WriteFile(cfgPath, []byte(`
+allow:
+  - "U+200B"
+`), 0644)
+
+	cmd := exec.Command("go", "run", ".", "--config", cfgPath, "--quiet", dir)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Errorf("config allowing U+200B should make scan clean, got:\n%s", string(output))
+	}
+}
+
+func TestEndToEndConfigSkip(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "vendor"), 0755)
+	os.WriteFile(filepath.Join(dir, "vendor", "lib.go"),
+		[]byte("package lib\x00\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main.go"),
+		[]byte("package main\n"), 0644)
+
+	cfgPath := filepath.Join(dir, ".nobin.yaml")
+	os.WriteFile(cfgPath, []byte(`
+skip:
+  - vendor
+`), 0644)
+
+	cmd := exec.Command("go", "run", ".", "--config", cfgPath, "--quiet", dir)
+	output, _ := cmd.CombinedOutput()
+	if strings.Contains(string(output), "vendor") {
+		t.Errorf("config skip should exclude vendor, got:\n%s", string(output))
+	}
+}
+
+func TestEndToEndConfigCLIOverride(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "dirty.js"),
+		[]byte("const x = \"\xe2\x80\x8b\";\n"), 0644)
+
+	cfgPath := filepath.Join(dir, ".nobin.yaml")
+	os.WriteFile(cfgPath, []byte(`
+verbose: true
+`), 0644)
+
+	cmd := exec.Command("go", "run", ".", "--config", cfgPath, "--quiet", dir)
+	output, _ := cmd.CombinedOutput()
+	out := string(output)
+
+	// Quiet mode: only file paths, no line/col details.
+	if strings.Contains(out, ":") {
+		t.Errorf("--quiet should override config verbose, got:\n%s", out)
+	}
+	if !strings.Contains(out, "dirty.js") {
+		t.Errorf("expected dirty.js in output, got:\n%s", out)
+	}
+}
+
+func TestEndToEndConfigCLIExtendsList(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "vendor"), 0755)
+	os.MkdirAll(filepath.Join(dir, "dist"), 0755)
+	os.WriteFile(filepath.Join(dir, "vendor", "lib.go"),
+		[]byte("package lib\x00\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "dist", "bundle.js"),
+		[]byte("var x=\x00;\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "main.go"),
+		[]byte("package main\n"), 0644)
+
+	cfgPath := filepath.Join(dir, ".nobin.yaml")
+	os.WriteFile(cfgPath, []byte(`
+skip:
+  - vendor
+`), 0644)
+
+	cmd := exec.Command("go", "run", ".", "--config", cfgPath, "--skip", "dist", "--quiet", dir)
+	output, _ := cmd.CombinedOutput()
+	out := string(output)
+
+	if strings.Contains(out, "vendor") {
+		t.Errorf("config skip should exclude vendor, got:\n%s", out)
+	}
+	if strings.Contains(out, "dist") {
+		t.Errorf("CLI --skip should exclude dist, got:\n%s", out)
+	}
+}
+
+func TestEndToEndExplicitConfig(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "dirty.js"),
+		[]byte("const x = \"\xe2\x80\x8b\";\n"), 0644)
+
+	// Config at a custom path allows ZWSP.
+	cfgPath := filepath.Join(dir, "custom-config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+allow:
+  - "U+200B"
+`), 0644)
+
+	cmd := exec.Command("go", "run", ".", "--config", cfgPath, "--quiet", dir)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Errorf("--config with allow should make scan clean, got:\n%s", string(output))
+	}
+}
+
 // --- End-to-end (via go run) ---------------------------------------------
 
 func TestEndToEnd(t *testing.T) {
