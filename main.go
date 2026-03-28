@@ -56,8 +56,9 @@ type skippedEntry struct {
 // --- Unicode detection ---------------------------------------------------
 
 type scanOpts struct {
-	allowBom   bool
-	allowRunes map[rune]bool
+	allowBom    bool
+	allowRunes  map[rune]bool
+	blockBase64 int
 }
 
 // isForbidden returns true for characters that should not appear in source
@@ -150,6 +151,67 @@ func formatReason(r rune) string {
 	return fmt.Sprintf("U+%04X %s", r, runeDescription(r))
 }
 
+// --- Base64 detection ----------------------------------------------------
+
+func isBase64Char(b byte) bool {
+	return (b >= 'A' && b <= 'Z') ||
+		(b >= 'a' && b <= 'z') ||
+		(b >= '0' && b <= '9') ||
+		b == '+' || b == '/'
+}
+
+func isPureHex(s []byte) bool {
+	for _, b := range s {
+		if !((b >= '0' && b <= '9') || (b >= 'A' && b <= 'F') || (b >= 'a' && b <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+// scanBase64 finds contiguous runs of base64 characters that are at least
+// minLen bytes long and not purely hexadecimal. Trailing padding (up to 2
+// '=' characters) counts toward run length.
+func scanBase64(data []byte, minLen int) []match {
+	var matches []match
+	lineNum := 1
+	lineStart := 0
+
+	for i := 0; i <= len(data); i++ {
+		if i < len(data) && data[i] != '\n' {
+			continue
+		}
+		line := data[lineStart:i]
+		j := 0
+		for j < len(line) {
+			if !isBase64Char(line[j]) {
+				j++
+				continue
+			}
+			start := j
+			for j < len(line) && isBase64Char(line[j]) {
+				j++
+			}
+			bodyEnd := j
+			for pad := 0; pad < 2 && j < len(line) && line[j] == '='; pad++ {
+				j++
+			}
+			body := line[start:bodyEnd]
+			totalLen := j - start
+			if totalLen >= minLen && !isPureHex(body) {
+				matches = append(matches, match{
+					Line:   lineNum,
+					Col:    start + 1,
+					Reason: fmt.Sprintf("base64-encoded data (%d chars)", totalLen),
+				})
+			}
+		}
+		lineNum++
+		lineStart = i + 1
+	}
+	return matches
+}
+
 // --- File scanning -------------------------------------------------------
 
 // maxMatchesPerFile caps the number of detailed matches stored per file.
@@ -204,6 +266,15 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int) {
 			col++
 		}
 		i += size
+	}
+
+	if opts.blockBase64 > 0 {
+		for _, m := range scanBase64(data, opts.blockBase64) {
+			total++
+			if total <= maxMatchesPerFile {
+				matches = append(matches, m)
+			}
+		}
 	}
 
 	// Append a summary if matches were truncated.
@@ -471,6 +542,7 @@ func main() {
 		skipPatterns   []string
 		skipExts       []string
 		allowCodePts   []string
+		blockBase64Str string
 	)
 
 	rootCmd := &cobra.Command{
@@ -523,6 +595,14 @@ class), and {alt1,alt2} (alternation). For example:
 				}
 				allowRunes[r] = true
 			}
+			var blockBase64 int
+			if blockBase64Str != "" {
+				n, err := strconv.Atoi(blockBase64Str)
+				if err != nil || n < 1 {
+					return fmt.Errorf("--block-base64: expected positive integer, got %q", blockBase64Str)
+				}
+				blockBase64 = n
+			}
 			return run(dir, runOpts{
 				allowBom:     allowBom,
 				allowRunes:   allowRunes,
@@ -534,6 +614,7 @@ class), and {alt1,alt2} (alternation). For example:
 				diffBase:     diffBase,
 				skipPatterns: skipPatterns,
 				skipExts:     skipExts,
+				blockBase64:  blockBase64,
 			})
 		},
 	}
@@ -552,6 +633,8 @@ class), and {alt1,alt2} (alternation). For example:
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
 	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
 	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")
+	f.StringVar(&blockBase64Str, "block-base64", "", "detect base64-encoded strings at least `N` characters long (default 64)")
+	rootCmd.Flag("block-base64").NoOptDefVal = "64"
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "nobin: %v\n", err)
@@ -570,6 +653,7 @@ type runOpts struct {
 	diffBase     string
 	skipPatterns []string
 	skipExts     []string
+	blockBase64  int
 }
 
 func run(dir string, opts runOpts) error {
@@ -601,7 +685,7 @@ func run(dir string, opts runOpts) error {
 	ch := make(chan string, workers)
 	resultCh := make(chan *fileResult, workers)
 
-	sopts := scanOpts{allowBom: opts.allowBom, allowRunes: opts.allowRunes}
+	sopts := scanOpts{allowBom: opts.allowBom, allowRunes: opts.allowRunes, blockBase64: opts.blockBase64}
 
 	var wg sync.WaitGroup
 	for range workers {
