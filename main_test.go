@@ -12,7 +12,9 @@ import (
 // --- test helpers --------------------------------------------------------
 
 func testBase64String(n int) string {
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	// Interleaves letters with digits so that substrings at any length
+	// are neither pure-hex nor pure-alpha.
+	const alphabet = "SGVsbG8gV29ybGQ0MTIz+/ABCDEFHIJKLMNOPQRSTUWXYZajkmnpqtuvwxiz56789"
 	s := strings.Repeat(alphabet, (n/len(alphabet))+1)
 	return s[:n]
 }
@@ -220,42 +222,76 @@ func TestIsPureHex(t *testing.T) {
 	}
 }
 
+// --- isPureAlpha ---------------------------------------------------------
+
+func TestIsPureAlpha(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"lowercase", "abcdefghij", true},
+		{"uppercase", "ABCDEFGHIJ", true},
+		{"mixed case", "HelloWorld", true},
+		{"empty", "", true},
+		{"contains digit", "Hello1World", false},
+		{"contains plus", "Hello+World", false},
+		{"contains slash", "Hello/World", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isPureAlpha([]byte(tt.input))
+			if got != tt.want {
+				t.Errorf("isPureAlpha(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 // --- scanBase64 ----------------------------------------------------------
 
 func TestScanBase64(t *testing.T) {
 	t.Run("detects at threshold", func(t *testing.T) {
-		data := []byte(testBase64String(64) + "\n")
-		matches := scanBase64(data, 64)
+		data := []byte(testBase64String(32) + "\n")
+		matches := scanBase64(data, 32)
 		if len(matches) != 1 {
 			t.Fatalf("expected 1 match, got %d", len(matches))
 		}
 		if matches[0].Line != 1 || matches[0].Col != 1 {
 			t.Errorf("position = %d:%d, want 1:1", matches[0].Line, matches[0].Col)
 		}
-		if !strings.Contains(matches[0].Reason, "64 chars") {
-			t.Errorf("reason should mention 64 chars, got: %s", matches[0].Reason)
+		if !strings.Contains(matches[0].Reason, "32 chars") {
+			t.Errorf("reason should mention 32 chars, got: %s", matches[0].Reason)
 		}
 	})
 
 	t.Run("skips below threshold", func(t *testing.T) {
-		data := []byte(testBase64String(63) + "\n")
-		matches := scanBase64(data, 64)
+		data := []byte(testBase64String(31) + "\n")
+		matches := scanBase64(data, 32)
 		if len(matches) != 0 {
 			t.Errorf("expected 0 matches, got %d", len(matches))
 		}
 	})
 
 	t.Run("skips pure hex", func(t *testing.T) {
-		data := []byte(testHexString(128) + "\n")
-		matches := scanBase64(data, 64)
+		data := []byte(testHexString(64) + "\n")
+		matches := scanBase64(data, 32)
 		if len(matches) != 0 {
 			t.Errorf("pure hex should not match, got %d matches", len(matches))
 		}
 	})
 
+	t.Run("skips pure alpha", func(t *testing.T) {
+		data := []byte(strings.Repeat("abcdefghijklmnopqrstuvwxyz", 3)[:64] + "\n")
+		matches := scanBase64(data, 32)
+		if len(matches) != 0 {
+			t.Errorf("pure alpha should not match, got %d matches", len(matches))
+		}
+	})
+
 	t.Run("correct column offset", func(t *testing.T) {
-		data := []byte("prefix " + testBase64String(64) + "\n")
-		matches := scanBase64(data, 64)
+		data := []byte("prefix " + testBase64String(32) + "\n")
+		matches := scanBase64(data, 32)
 		if len(matches) != 1 {
 			t.Fatalf("expected 1 match, got %d", len(matches))
 		}
@@ -265,8 +301,8 @@ func TestScanBase64(t *testing.T) {
 	})
 
 	t.Run("multiple lines", func(t *testing.T) {
-		data := []byte("clean\n" + testBase64String(64) + "\nclean\n" + testBase64String(80) + "\n")
-		matches := scanBase64(data, 64)
+		data := []byte("clean\n" + testBase64String(32) + "\nclean\n" + testBase64String(48) + "\n")
+		matches := scanBase64(data, 32)
 		if len(matches) != 2 {
 			t.Fatalf("expected 2 matches, got %d", len(matches))
 		}
@@ -279,24 +315,24 @@ func TestScanBase64(t *testing.T) {
 	})
 
 	t.Run("non-base64 chars split runs", func(t *testing.T) {
-		data := []byte(testBase64String(40) + " " + testBase64String(40) + "\n")
-		matches := scanBase64(data, 64)
+		data := []byte(testBase64String(20) + " " + testBase64String(20) + "\n")
+		matches := scanBase64(data, 32)
 		if len(matches) != 0 {
 			t.Errorf("split runs should not match, got %d matches", len(matches))
 		}
 	})
 
 	t.Run("multiple runs on one line", func(t *testing.T) {
-		data := []byte(testBase64String(64) + " " + testBase64String(64) + "\n")
-		matches := scanBase64(data, 64)
+		data := []byte(testBase64String(32) + " " + testBase64String(32) + "\n")
+		matches := scanBase64(data, 32)
 		if len(matches) != 2 {
 			t.Errorf("expected 2 matches on one line, got %d", len(matches))
 		}
 	})
 
 	t.Run("no trailing newline", func(t *testing.T) {
-		data := []byte(testBase64String(64))
-		matches := scanBase64(data, 64)
+		data := []byte(testBase64String(32))
+		matches := scanBase64(data, 32)
 		if len(matches) != 1 {
 			t.Errorf("should detect without trailing newline, got %d matches", len(matches))
 		}
@@ -316,7 +352,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("detects when enabled", func(t *testing.T) {
 		data := []byte(testBase64String(100) + "\n")
-		matches, total := scanBytes(data, scanOpts{blockBase64: 64})
+		matches, total := scanBytes(data, scanOpts{blockBase64: 32})
 		if total != 1 {
 			t.Fatalf("expected 1 match, got %d", total)
 		}
@@ -327,7 +363,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("ignores pure hex", func(t *testing.T) {
 		data := []byte(testHexString(100) + "\n")
-		_, total := scanBytes(data, scanOpts{blockBase64: 64})
+		_, total := scanBytes(data, scanOpts{blockBase64: 32})
 		if total != 0 {
 			t.Errorf("pure hex should not match, got %d matches", total)
 		}
@@ -335,7 +371,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("combined with rune detection", func(t *testing.T) {
 		data := []byte("hello\x00world\n" + testBase64String(100) + "\n")
-		matches, total := scanBytes(data, scanOpts{blockBase64: 64})
+		matches, total := scanBytes(data, scanOpts{blockBase64: 32})
 		if total != 2 {
 			t.Fatalf("expected 2 matches (1 rune + 1 base64), got %d", total)
 		}
@@ -1172,9 +1208,9 @@ func TestEndToEndBlockBase64(t *testing.T) {
 		t.Errorf("expected encoded.txt in output, got:\n%s", string(output))
 	}
 
-	// With --block-base64=128: 100-char string should not match
-	cmd = exec.Command("go", "run", ".", "--block-base64=128", "--quiet", dir)
+	// With --block-base64=200: 100-char string should not match
+	cmd = exec.Command("go", "run", ".", "--block-base64=200", "--quiet", dir)
 	if err := cmd.Run(); err != nil {
-		t.Errorf("with --block-base64=128, 100-char string should not match: %v", err)
+		t.Errorf("with --block-base64=200, 100-char string should not match: %v", err)
 	}
 }

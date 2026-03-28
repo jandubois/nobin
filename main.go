@@ -170,8 +170,17 @@ func isPureHex(s []byte) bool {
 	return true
 }
 
+func isPureAlpha(s []byte) bool {
+	for _, b := range s {
+		if !((b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')) {
+			return false
+		}
+	}
+	return true
+}
+
 // scanBase64 finds contiguous runs of base64 characters that are at least
-// minLen bytes long and not purely hexadecimal.
+// minLen bytes long, not purely hexadecimal, and not purely alphabetic.
 func scanBase64(data []byte, minLen int) []match {
 	var matches []match
 	lineNum := 1
@@ -193,7 +202,7 @@ func scanBase64(data []byte, minLen int) []match {
 				j++
 			}
 			run := line[start:j]
-			if len(run) >= minLen && !isPureHex(run) {
+			if len(run) >= minLen && !isPureHex(run) && !isPureAlpha(run) {
 				matches = append(matches, match{
 					Line:   lineNum,
 					Col:    start + 1,
@@ -751,8 +760,8 @@ class), and {alt1,alt2} (alternation). For example:
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
 	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
 	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")
-	f.StringVar(&blockBase64Str, "block-base64", "", "detect base64-encoded strings at least `N` characters long (default 64; override with =N, e.g. --block-base64=128)")
-	rootCmd.Flag("block-base64").NoOptDefVal = "64"
+	f.StringVar(&blockBase64Str, "block-base64", "", "detect base64-encoded strings at least `N` characters long (default 32; override with =N, e.g. --block-base64=64)")
+	rootCmd.Flag("block-base64").NoOptDefVal = "32"
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "nobin: %v\n", err)

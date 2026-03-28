@@ -77,7 +77,7 @@ Block base64-encoded data (e.g. binary payloads hidden in source files):
 
 ```
 nobin --block-base64 ./my-repo
-nobin --block-base64=128 ./my-repo   # require 128+ characters to flag
+nobin --block-base64=64 ./my-repo    # require 64+ characters to flag
 ```
 
 ### Flags
@@ -89,7 +89,7 @@ nobin --block-base64=128 ./my-repo   # require 128+ characters to flag
       --allow-bom           allow UTF-8 BOM at the start of files
       --allow-emoji         allow VS15/VS16 (U+FE0E, U+FE0F) emoji presentation selectors
       --allow-escape        allow ESC (0x1B) for ANSI terminal sequences
-      --block-base64[=N]    detect base64-encoded strings of N+ characters (default 64)
+      --block-base64[=N]    detect base64-encoded strings of N+ characters (default 32)
       --config string       path to config file (default: .nobin.yaml in current directory or git root)
       --diff string         scan only files changed since BASE (branch, tag, or commit)
       --gitignore           respect .gitignore rules
@@ -164,18 +164,20 @@ binary payloads in otherwise text-only files. It scans each line for
 contiguous runs of base64 characters (`A`--`Z`, `a`--`z`, `0`--`9`,
 `+`, `/`).
 
-To reduce false positives, strings that contain only hexadecimal
-characters (`0`--`9`, `A`--`F`, `a`--`f`) are ignored. This excludes
-SHA hashes, UUIDs, and similar hex-encoded identifiers, which are
-common in source code and almost never base64-encoded binary data.
+To reduce false positives, two kinds of strings are ignored:
+purely hexadecimal strings (`0`--`9`, `A`--`F`, `a`--`f`), which
+catches SHA hashes, UUIDs, and similar identifiers; and purely
+alphabetic strings (`A`--`Z`, `a`--`z`), which catches long
+variable names and other plain words. Real base64-encoded binary
+data almost always contains digits, `+`, or `/` mixed with letters.
 
-The default minimum length is 64 characters. To override, use `=`:
+The default minimum length is 32 characters. To override, use `=`:
 
 ```
-nobin --block-base64=128 ./my-repo
+nobin --block-base64=64 ./my-repo
 ```
 
-Note: `--block-base64 128` (space-separated) does not work; the `=`
+Note: `--block-base64 64` (space-separated) does not work; the `=`
 is required when setting a custom length.
 
 ## Background
