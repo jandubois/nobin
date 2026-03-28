@@ -18,6 +18,7 @@ and encoding errors.
 | Variation Selectors | U+FE00--U+FE0F, U+E0100--U+E01EF (Glassworm payload encoding) |
 | Invalid UTF-8 | Any byte sequence that does not decode as valid UTF-8 |
 | BOM | U+FEFF at the start of a file |
+| Base64 data (opt-in) | Long runs of base64 characters, with `--block-base64` |
 
 ## Install
 
@@ -72,6 +73,13 @@ Allow ESC characters (for repos with ANSI terminal output in test fixtures):
 nobin --allow-escape ./my-repo
 ```
 
+Block base64-encoded data (e.g. binary payloads hidden in source files):
+
+```
+nobin --block-base64 ./my-repo
+nobin --block-base64=128 ./my-repo   # require 128+ characters to flag
+```
+
 ### Flags
 
 ```
@@ -81,6 +89,7 @@ nobin --allow-escape ./my-repo
       --allow-bom           allow UTF-8 BOM at the start of files
       --allow-emoji         allow VS15/VS16 (U+FE0E, U+FE0F) emoji presentation selectors
       --allow-escape        allow ESC (0x1B) for ANSI terminal sequences
+      --block-base64[=N]    detect base64-encoded strings of N+ characters (default 64)
       --diff string         scan only files changed since BASE (branch, tag, or commit)
       --gitignore           respect .gitignore rules
       --hide-skipped        hide the list of skipped files from output
@@ -133,6 +142,27 @@ Files with more than 20 matches (typically binaries) show the first 20
 and a summary of the rest.
 
 **Quiet** (`-q`) prints only file paths, one per line, for use in scripts.
+
+### Base64 detection
+
+The `--block-base64` flag detects base64-encoded data that might hide
+binary payloads in otherwise text-only files. It scans each line for
+contiguous runs of base64 characters (`A`--`Z`, `a`--`z`, `0`--`9`,
+`+`, `/`) plus up to two `=` padding characters.
+
+To reduce false positives, strings that contain only hexadecimal
+characters (`0`--`9`, `A`--`F`, `a`--`f`) are ignored. This excludes
+SHA hashes, UUIDs, and similar hex-encoded identifiers, which are
+common in source code and almost never base64-encoded binary data.
+
+The default minimum length is 64 characters. To override, use `=`:
+
+```
+nobin --block-base64=128 ./my-repo
+```
+
+Note: `--block-base64 128` (space-separated) does not work; the `=`
+is required when setting a custom length.
 
 ## Background
 

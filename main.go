@@ -633,7 +633,7 @@ class), and {alt1,alt2} (alternation). For example:
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
 	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
 	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")
-	f.StringVar(&blockBase64Str, "block-base64", "", "detect base64-encoded strings at least `N` characters long (default 64)")
+	f.StringVar(&blockBase64Str, "block-base64", "", "detect base64-encoded strings at least `N` characters long (default 64; override with =N, e.g. --block-base64=128)")
 	rootCmd.Flag("block-base64").NoOptDefVal = "64"
 
 	if err := rootCmd.Execute(); err != nil {
