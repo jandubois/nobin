@@ -557,7 +557,8 @@ type config struct {
 	AllowBom    bool     `yaml:"allow-bom"`
 	AllowEmoji  bool     `yaml:"allow-emoji"`
 	AllowEscape bool     `yaml:"allow-escape"`
-	BlockBase64 int      `yaml:"block-base64"`
+	BlockBase64  int      `yaml:"block-base64"`
+	SkipBase64   []string `yaml:"skip-base64"`
 	Gitignore   bool     `yaml:"gitignore"`
 	HideSkipped bool     `yaml:"hide-skipped"`
 	Quiet       bool     `yaml:"quiet"`
@@ -631,8 +632,9 @@ func main() {
 		skipPatterns   []string
 		skipExts       []string
 		allowCodePts   []string
-		blockBase64Str string
-		configFlag     string
+		blockBase64Str   string
+		skipBase64       []string
+		configFlag       string
 	)
 
 	rootCmd := &cobra.Command{
@@ -712,6 +714,7 @@ class), and {alt1,alt2} (alternation). For example:
 			// CLI lists extend config lists.
 			cfg.Allow = append(cfg.Allow, allowCodePts...)
 			cfg.Skip = append(cfg.Skip, skipPatterns...)
+			cfg.SkipBase64 = append(cfg.SkipBase64, skipBase64...)
 			cfg.SkipExt = append(cfg.SkipExt, skipExts...)
 
 			// Build the allowed-runes set from merged config.
@@ -760,6 +763,7 @@ class), and {alt1,alt2} (alternation). For example:
 				skipPatterns: cfg.Skip,
 				skipExts:     cfg.SkipExt,
 				blockBase64:  blockBase64,
+				skipBase64:   cfg.SkipBase64,
 			})
 		},
 	}
@@ -778,6 +782,7 @@ class), and {alt1,alt2} (alternation). For example:
 	f.StringVar(&configFlag, "config", "", "path to config file (default: .nobin.yaml in current directory or git root)")
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
 	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
+	f.StringArrayVar(&skipBase64, "skip-base64", nil, "skip base64 detection for paths matching glob `PATTERN` (repeatable)")
 	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")
 	f.StringVar(&blockBase64Str, "block-base64", "", "detect base64-encoded strings at least `N` characters long (default 32; override with =N, e.g. --block-base64=64)")
 	rootCmd.Flag("block-base64").NoOptDefVal = "32"
@@ -797,9 +802,10 @@ type runOpts struct {
 	allowRunes   map[rune]bool
 	hideSkipped  bool
 	diffBase     string
-	skipPatterns []string
-	skipExts     []string
-	blockBase64  int
+	skipPatterns     []string
+	skipExts         []string
+	blockBase64      int
+	skipBase64       []string
 }
 
 func run(dir string, opts runOpts) error {
@@ -826,6 +832,19 @@ func run(dir string, opts runOpts) error {
 		fmt.Fprintf(os.Stderr, "Scanning %s (%d files) ...\n", dir, len(lr.Files))
 	}
 
+	// Record skip-base64 entries for the skipped report.
+	if opts.blockBase64 > 0 && len(opts.skipBase64) > 0 {
+		for _, path := range lr.Files {
+			relPath, _ := filepath.Rel(dir, path)
+			if matched, pattern := matchesSkip(relPath, opts.skipBase64); matched {
+				lr.Skipped = append(lr.Skipped, skippedEntry{
+					Path:   path,
+					Reason: fmt.Sprintf("--skip-base64 %s", pattern),
+				})
+			}
+		}
+	}
+
 	// Scan files in parallel.
 	workers := runtime.NumCPU()
 	ch := make(chan string, workers)
@@ -839,7 +858,14 @@ func run(dir string, opts runOpts) error {
 		go func() {
 			defer wg.Done()
 			for path := range ch {
-				if r := scanFile(path, sopts); r != nil {
+				fileOpts := sopts
+				if fileOpts.blockBase64 > 0 && len(opts.skipBase64) > 0 {
+					relPath, _ := filepath.Rel(dir, path)
+					if matched, _ := matchesSkip(relPath, opts.skipBase64); matched {
+						fileOpts.blockBase64 = 0
+					}
+				}
+				if r := scanFile(path, fileOpts); r != nil {
 					resultCh <- r
 				}
 			}

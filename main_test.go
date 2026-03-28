@@ -1230,3 +1230,59 @@ func TestEndToEndBlockBase64(t *testing.T) {
 		t.Errorf("with --block-base64=200, 100-char string should not match: %v", err)
 	}
 }
+
+func TestEndToEndSkipBase64(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+
+	// File with base64 AND a forbidden character.
+	os.WriteFile(filepath.Join(dir, "mixed.txt"),
+		[]byte(testBase64String(100)+"\nhello\x00world\n"), 0644)
+	// File with only base64.
+	os.WriteFile(filepath.Join(dir, "b64only.txt"),
+		[]byte(testBase64String(100)+"\n"), 0644)
+
+	// --block-base64 without --skip-base64: both files flagged
+	cmd := exec.Command("go", "run", ".", "--block-base64", "--quiet", dir)
+	output, _ := cmd.CombinedOutput()
+	out := string(output)
+	if !strings.Contains(out, "mixed.txt") {
+		t.Errorf("expected mixed.txt flagged, got:\n%s", out)
+	}
+	if !strings.Contains(out, "b64only.txt") {
+		t.Errorf("expected b64only.txt flagged, got:\n%s", out)
+	}
+
+	// --skip-base64 for mixed.txt: still flagged for NUL, b64only.txt still flagged for base64
+	cmd = exec.Command("go", "run", ".", "--block-base64", "--skip-base64", "mixed.txt", "--quiet", dir)
+	output, _ = cmd.CombinedOutput()
+	out = string(output)
+	if !strings.Contains(out, "mixed.txt") {
+		t.Errorf("mixed.txt should still be flagged for NUL, got:\n%s", out)
+	}
+	if !strings.Contains(out, "b64only.txt") {
+		t.Errorf("b64only.txt should still be flagged for base64, got:\n%s", out)
+	}
+
+	// --skip-base64 appears in skipped report
+	cmd = exec.Command("go", "run", ".", "--block-base64", "--skip-base64", "b64only.txt", dir)
+	output, _ = cmd.CombinedOutput()
+	out = string(output)
+	if !strings.Contains(out, "--skip-base64 b64only.txt") {
+		t.Errorf("expected skip-base64 entry in skipped report, got:\n%s", out)
+	}
+
+	// --skip-base64 for b64only.txt: should be clean now
+	cmd = exec.Command("go", "run", ".", "--block-base64", "--skip-base64", "b64only.txt", "--quiet", dir)
+	output, _ = cmd.CombinedOutput()
+	out = string(output)
+	if strings.Contains(out, "b64only.txt") {
+		t.Errorf("b64only.txt should be clean with --skip-base64, got:\n%s", out)
+	}
+	if !strings.Contains(out, "mixed.txt") {
+		t.Errorf("mixed.txt should still be flagged for NUL, got:\n%s", out)
+	}
+}

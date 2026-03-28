@@ -96,6 +96,7 @@ nobin --block-base64=64 ./my-repo    # require 64+ characters to flag
       --hide-skipped        hide the list of skipped files from output
   -q, --quiet               print only file paths with issues
       --skip PATTERN        skip paths matching glob PATTERN relative to scan root (repeatable)
+      --skip-base64 PATTERN skip base64 detection for paths matching glob PATTERN (repeatable)
       --skip-ext strings    skip files with these extensions (comma-separated, without dot)
   -v, --verbose             show line, column, and code point for each match
 ```
@@ -152,8 +153,8 @@ specify a different path.
 
 All flags except `--diff` and `--config` can be set in the config file.
 Command-line flags override scalar values; list flags (`--skip`,
-`--skip-ext`, `--allow`) extend the config lists rather than replace
-them.
+`--skip-base64`, `--skip-ext`, `--allow`) extend the config lists
+rather than replace them.
 
 See [`nobin.yaml`](nobin.yaml) for a sample file with all defaults.
 
@@ -181,6 +182,13 @@ nobin --block-base64=64 ./my-repo
 
 Note: `--block-base64 64` (space-separated) does not work; the `=`
 is required when setting a custom length.
+
+Use `--skip-base64` to exempt specific files from base64 detection
+while still scanning them for invisible characters:
+
+```
+nobin --block-base64 --skip-base64 'docs/*.md' ./my-repo
+```
 
 ## Background
 

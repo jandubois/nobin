@@ -2,7 +2,7 @@
 # Copy to .nobin.yaml in your project root to customize.
 #
 # Command-line flags override these values. List flags
-# (--skip, --skip-ext, --allow) extend the lists below.
+# (--skip, --skip-base64, --skip-ext, --allow) extend the lists below.
 
 # Scanning scope
 all: false
@@ -19,6 +19,7 @@ allow-escape: false
 
 # Additional checks (0 = disabled, positive value = minimum length)
 block-base64: 0
+skip-base64: []
 
 # Output
 quiet: false
