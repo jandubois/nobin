@@ -44,9 +44,10 @@ type match struct {
 }
 
 type fileResult struct {
-	Path       string
-	Matches    []match
-	MatchCount int // total matches (may exceed len(Matches) due to cap)
+	Path        string
+	Matches     []match
+	MatchCount  int // total matches (may exceed len(Matches) due to cap)
+	Base64Count int
 }
 
 type skippedEntry struct {
@@ -243,9 +244,10 @@ func scanBase64(data []byte, minLen int) []match {
 const maxMatchesPerFile = 20
 
 // scanBytes checks content for forbidden characters and invalid UTF-8.
-func scanBytes(data []byte, opts scanOpts) ([]match, int) {
+func scanBytes(data []byte, opts scanOpts) ([]match, int, int) {
 	var matches []match
 	total := 0
+	base64Count := 0
 
 	line := 1
 	col := 1
@@ -294,6 +296,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int) {
 	if opts.blockBase64 > 0 {
 		for _, m := range scanBase64(data, opts.blockBase64) {
 			total++
+			base64Count++
 			if total <= maxMatchesPerFile {
 				matches = append(matches, m)
 			}
@@ -307,7 +310,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int) {
 		})
 	}
 
-	return matches, total
+	return matches, total, base64Count
 }
 
 func scanFile(path string, opts scanOpts) *fileResult {
@@ -316,11 +319,11 @@ func scanFile(path string, opts scanOpts) *fileResult {
 		return nil
 	}
 
-	matches, total := scanBytes(data, opts)
+	matches, total, base64Count := scanBytes(data, opts)
 	if total == 0 {
 		return nil
 	}
-	return &fileResult{Path: path, Matches: matches, MatchCount: total}
+	return &fileResult{Path: path, Matches: matches, MatchCount: total, Base64Count: base64Count}
 }
 
 // --- Skip matching -------------------------------------------------------
@@ -902,12 +905,19 @@ func run(dir string, opts runOpts) error {
 					m.Reason)
 			}
 		default:
-			n := r.MatchCount
-			label := "matches"
-			if n == 1 {
-				label = "match"
+			charCount := r.MatchCount - r.Base64Count
+			var parts []string
+			if charCount > 0 {
+				label := "match"
+				if charCount != 1 {
+					label = "matches"
+				}
+				parts = append(parts, fmt.Sprintf("%d %s", charCount, label))
 			}
-			fmt.Printf("%-60s  %d %s\n", r.Path, n, label)
+			if r.Base64Count > 0 {
+				parts = append(parts, fmt.Sprintf("%d base64", r.Base64Count))
+			}
+			fmt.Printf("%-60s  %s\n", r.Path, strings.Join(parts, " + "))
 		}
 	}
 

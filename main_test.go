@@ -360,7 +360,7 @@ func TestScanBase64(t *testing.T) {
 func TestScanBytesBlockBase64(t *testing.T) {
 	t.Run("disabled by default", func(t *testing.T) {
 		data := []byte(testBase64String(100) + "\n")
-		_, total := scanBytes(data, scanOpts{})
+		_, total, _ := scanBytes(data, scanOpts{})
 		if total != 0 {
 			t.Errorf("base64 detection should be off by default, got %d matches", total)
 		}
@@ -368,7 +368,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("detects when enabled", func(t *testing.T) {
 		data := []byte(testBase64String(100) + "\n")
-		matches, total := scanBytes(data, scanOpts{blockBase64: 32})
+		matches, total, _ := scanBytes(data, scanOpts{blockBase64: 32})
 		if total != 1 {
 			t.Fatalf("expected 1 match, got %d", total)
 		}
@@ -379,7 +379,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("ignores pure hex", func(t *testing.T) {
 		data := []byte(testHexString(100) + "\n")
-		_, total := scanBytes(data, scanOpts{blockBase64: 32})
+		_, total, _ := scanBytes(data, scanOpts{blockBase64: 32})
 		if total != 0 {
 			t.Errorf("pure hex should not match, got %d matches", total)
 		}
@@ -387,7 +387,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("combined with rune detection", func(t *testing.T) {
 		data := []byte("hello\x00world\n" + testBase64String(100) + "\n")
-		matches, total := scanBytes(data, scanOpts{blockBase64: 32})
+		matches, total, _ := scanBytes(data, scanOpts{blockBase64: 32})
 		if total != 2 {
 			t.Fatalf("expected 2 matches (1 rune + 1 base64), got %d", total)
 		}
@@ -406,20 +406,20 @@ func TestScanBytesBomAllowed(t *testing.T) {
 	bom := []byte("\xef\xbb\xbfhello\n")
 
 	// Default: BOM flagged
-	_, total := scanBytes(bom, scanOpts{})
+	_, total, _ := scanBytes(bom, scanOpts{})
 	if total != 1 {
 		t.Errorf("BOM should be flagged by default, got %d matches", total)
 	}
 
 	// With allowBom: BOM at start suppressed
-	_, total = scanBytes(bom, scanOpts{allowBom: true})
+	_, total, _ = scanBytes(bom, scanOpts{allowBom: true})
 	if total != 0 {
 		t.Errorf("BOM at start should be allowed with allowBom, got %d matches", total)
 	}
 
 	// Mid-file FEFF still flagged even with allowBom
 	mid := []byte("x\xef\xbb\xbfy\n")
-	_, total = scanBytes(mid, scanOpts{allowBom: true})
+	_, total, _ = scanBytes(mid, scanOpts{allowBom: true})
 	if total != 1 {
 		t.Errorf("mid-file FEFF should still be flagged, got %d matches", total)
 	}
@@ -491,7 +491,7 @@ func TestScanBytes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matches, total := scanBytes(tt.content, scanOpts{})
+			matches, total, _ := scanBytes(tt.content, scanOpts{})
 			gotMatches := total > 0
 
 			if gotMatches != tt.wantMatches {
@@ -522,7 +522,7 @@ func TestScanBytes(t *testing.T) {
 func TestScanBytesPosition(t *testing.T) {
 	// Forbidden char at line 2, col 5
 	content := []byte("abcd\nefgh\xe2\x80\x8bijk\n")
-	matches, total := scanBytes(content, scanOpts{})
+	matches, total, _ := scanBytes(content, scanOpts{})
 	if total != 1 {
 		t.Fatalf("expected 1 match, got %d", total)
 	}
@@ -537,7 +537,7 @@ func TestScanBytesPosition(t *testing.T) {
 func TestScanBytesTruncation(t *testing.T) {
 	// Build a file with 100 null bytes — well over maxMatchesPerFile.
 	data := make([]byte, 100)
-	matches, total := scanBytes(data, scanOpts{})
+	matches, total, _ := scanBytes(data, scanOpts{})
 	if total != 100 {
 		t.Errorf("total = %d, want 100", total)
 	}
