@@ -2,7 +2,8 @@
 # Copy to .nobin.yaml in your project root to customize.
 #
 # Command-line flags override these values. List flags
-# (--skip, --skip-base64, --skip-ext, --allow) extend the lists below.
+# (--skip, --skip-base64, --skip-confusables, --skip-ext, --allow)
+# extend the lists below.
 
 # Scanning scope
 all: false
@@ -17,9 +18,11 @@ allow-bom: false
 allow-emoji: false
 allow-escape: false
 
-# Additional checks (0 = disabled, positive value = minimum length)
-block-base64: 0
+# Additional checks (opt-in)
+block-base64: 0          # 0 = disabled, N = minimum run length
 skip-base64: []
+block-confusables: ""    # "" = disabled, "alphanum" / "url" / "strict"
+skip-confusables: []
 
 # Output
 quiet: false

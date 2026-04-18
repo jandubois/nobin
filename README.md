@@ -19,6 +19,7 @@ and encoding errors.
 | Invalid UTF-8 | Any byte sequence that does not decode as valid UTF-8 |
 | BOM | U+FEFF at the start of a file |
 | Base64 data (opt-in) | Long runs of base64 characters, with `--block-base64` |
+| Latin confusables (opt-in) | Non-ASCII code points that mimic Latin, with `--block-confusables` |
 
 ## Install
 
@@ -80,6 +81,14 @@ nobin --block-base64 ./my-repo
 nobin --block-base64=64 ./my-repo    # require 64+ characters to flag
 ```
 
+Block homograph characters (non-ASCII code points that look like ASCII):
+
+```
+nobin --block-confusables ./my-repo            # alphanum (default)
+nobin --block-confusables=url ./my-repo        # alphanum + URL chars
+nobin --block-confusables=strict ./my-repo     # all printable ASCII
+```
+
 ### Flags
 
 ```
@@ -90,6 +99,7 @@ nobin --block-base64=64 ./my-repo    # require 64+ characters to flag
       --allow-emoji         allow VS15/VS16 (U+FE0E, U+FE0F) emoji presentation selectors
       --allow-escape        allow ESC (0x1B) for ANSI terminal sequences
       --block-base64[=N]    detect base64-encoded strings of N+ characters (default 32)
+      --block-confusables[=MODE]  detect non-ASCII code points that mimic ASCII (alphanum, url, or strict; default alphanum)
       --config string       path to config file (default: .nobin.yaml in current directory or git root)
       --diff string         scan only files changed since BASE (branch, tag, or commit)
       --gitignore           respect .gitignore rules
@@ -97,6 +107,7 @@ nobin --block-base64=64 ./my-repo    # require 64+ characters to flag
   -q, --quiet               print only file paths with issues
       --skip PATTERN        skip paths matching glob PATTERN relative to scan root (repeatable)
       --skip-base64 PATTERN skip base64 detection for paths matching glob PATTERN (repeatable)
+      --skip-confusables PATTERN skip confusable detection for paths matching glob PATTERN (repeatable)
       --skip-ext strings    skip files with these extensions (comma-separated, without dot)
   -v, --verbose             show line, column, and code point for each match
 ```
@@ -153,8 +164,8 @@ specify a different path.
 
 All flags except `--diff` and `--config` can be set in the config file.
 Command-line flags override scalar values; list flags (`--skip`,
-`--skip-base64`, `--skip-ext`, `--allow`) extend the config lists
-rather than replace them.
+`--skip-base64`, `--skip-confusables`, `--skip-ext`, `--allow`) extend
+the config lists rather than replace them.
 
 See [`nobin.yaml`](nobin.yaml) for a sample file with all defaults.
 
@@ -189,6 +200,79 @@ while still scanning them for invisible characters:
 ```
 nobin --block-base64 --skip-base64 'docs/*.md' ./my-repo
 ```
+
+### Confusable detection
+
+The `--block-confusables` flag detects non-ASCII code points that look
+like ASCII characters. These are the building blocks of homograph
+attacks: an attacker substitutes Cyrillic `а` for Latin `a`, Cherokee
+`Ꭺ` for Latin `A`, or mathematical-styled `𝐚𝐩𝐩𝐥𝐞` for `apple`, so a
+URL or identifier appears legitimate but points somewhere else.
+
+#### Modes
+
+The flag takes an optional mode argument controlling which ASCII
+characters the source code point may resemble:
+
+| Mode | Target alphabet | Use case |
+|---|---|---|
+| `alphanum` *(default)* | `A-Z a-z 0-9` | identifier and word-shaped lookalikes |
+| `url` | alphanum + `. - _ ~ / : @ ? & = # % +` | URL spoofing including domain-separator attacks like `paypal․com` (U+2024 → `.`) |
+| `strict` | all printable ASCII | every confusable, including typographic punctuation |
+
+Each broader mode is a strict superset of the narrower one. The
+default mode catches the most common attack — cross-script letter
+substitution — while keeping false positives near zero on
+documentation containing smart quotes, em dashes, and ellipses.
+
+```
+nobin --block-confusables ./my-repo            # alphanum (default)
+nobin --block-confusables=url ./my-repo        # + URL punctuation
+nobin --block-confusables=strict ./my-repo     # all ASCII targets
+```
+
+#### Code-point sources
+
+Each mode unions two data sources:
+
+- Every UTS #39 `confusables.txt` entry whose skeleton consists
+  entirely of characters in the mode's target alphabet. This covers
+  cross-script lookalikes (Cyrillic, Greek, Armenian, Cherokee,
+  Coptic, ...) and every styled-Latin block (bold, italic, script,
+  fraktur, double-struck, sans-serif, monospace, fullwidth).
+- Every code point whose NFKC compatibility decomposition consists
+  entirely of characters in the mode's target alphabet. This closes
+  the gap `confusables.txt` leaves for fullwidth digits and other
+  compatibility forms.
+
+The current data comes from Unicode 17.0.0. Regenerate the tables
+with `go generate ./...` after bumping the vendored `confusables.txt`.
+
+#### Tuning false positives
+
+`--skip-confusables` exempts specific files (test fixtures, translation
+catalogs, internationalized prose):
+
+```
+nobin --block-confusables --skip-confusables 'testdata/*' ./my-repo
+```
+
+`--allow` exempts specific code points repository-wide. Use this when
+URL mode trips on common typographic punctuation in your prose:
+
+```
+# url mode for a docs-heavy repo, allowing typographic prose chars
+nobin --block-confusables=url \
+      --allow U+2011 \   # NON-BREAKING HYPHEN (‑)
+      --allow U+2013 \   # EN DASH (–)
+      --allow U+2026 \   # HORIZONTAL ELLIPSIS (…)
+      ./my-repo
+```
+
+`--allow` takes precedence over confusable detection, so the listed
+code points pass even though they otherwise mimic ASCII `-` or `.`.
+This combination keeps domain-separator attacks like `paypal․com`
+flagged while letting prose use real typographic punctuation.
 
 ## Background
 

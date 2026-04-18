@@ -1,5 +1,7 @@
 package main
 
+//go:generate go -C internal/confusables/gen run .
+
 import (
 	"fmt"
 	"io/fs"
@@ -44,10 +46,11 @@ type match struct {
 }
 
 type fileResult struct {
-	Path        string
-	Matches     []match
-	MatchCount  int // total matches (may exceed len(Matches) due to cap)
-	Base64Count int
+	Path            string
+	Matches         []match
+	MatchCount      int // total matches (may exceed len(Matches) due to cap)
+	Base64Count     int
+	ConfusableCount int
 }
 
 type skippedEntry struct {
@@ -61,6 +64,7 @@ type scanOpts struct {
 	allowBom    bool
 	allowRunes  map[rune]bool
 	blockBase64 int
+	confusables *unicode.RangeTable // nil = disabled
 }
 
 // isForbidden returns true for characters that should not appear in source
@@ -244,10 +248,11 @@ func scanBase64(data []byte, minLen int) []match {
 const maxMatchesPerFile = 20
 
 // scanBytes checks content for forbidden characters and invalid UTF-8.
-func scanBytes(data []byte, opts scanOpts) ([]match, int, int) {
+func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 	var matches []match
 	total := 0
 	base64Count := 0
+	confusableCount := 0
 
 	line := 1
 	col := 1
@@ -277,6 +282,16 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int) {
 					Line:   line,
 					Col:    col,
 					Reason: reason,
+				})
+			}
+		} else if opts.confusables != nil && !opts.allowRunes[r] && unicode.Is(opts.confusables, r) {
+			hit = true
+			confusableCount++
+			if total < maxMatchesPerFile {
+				matches = append(matches, match{
+					Line:   line,
+					Col:    col,
+					Reason: fmt.Sprintf("U+%04X Latin confusable", r),
 				})
 			}
 		}
@@ -310,7 +325,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int) {
 		})
 	}
 
-	return matches, total, base64Count
+	return matches, total, base64Count, confusableCount
 }
 
 func scanFile(path string, opts scanOpts) *fileResult {
@@ -319,11 +334,17 @@ func scanFile(path string, opts scanOpts) *fileResult {
 		return nil
 	}
 
-	matches, total, base64Count := scanBytes(data, opts)
+	matches, total, base64Count, confusableCount := scanBytes(data, opts)
 	if total == 0 {
 		return nil
 	}
-	return &fileResult{Path: path, Matches: matches, MatchCount: total, Base64Count: base64Count}
+	return &fileResult{
+		Path:            path,
+		Matches:         matches,
+		MatchCount:      total,
+		Base64Count:     base64Count,
+		ConfusableCount: confusableCount,
+	}
 }
 
 // --- Skip matching -------------------------------------------------------
@@ -551,23 +572,44 @@ func gitListFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
+// --- Confusables mode ----------------------------------------------------
+
+// confusablesTableForMode returns the RangeTable for the named --block-confusables
+// mode, nil if disabled (empty string), or an error for an unknown mode.
+func confusablesTableForMode(mode string) (*unicode.RangeTable, error) {
+	switch mode {
+	case "":
+		return nil, nil
+	case "alphanum":
+		return latinConfusablesAlphanum, nil
+	case "url":
+		return latinConfusablesURL, nil
+	case "strict":
+		return latinConfusablesStrict, nil
+	default:
+		return nil, fmt.Errorf("--block-confusables: unknown mode %q (expected alphanum, url, or strict)", mode)
+	}
+}
+
 // --- Configuration -------------------------------------------------------
 
 type config struct {
-	All         bool     `yaml:"all"`
-	Allow       []string `yaml:"allow"`
-	AllowBell   bool     `yaml:"allow-bell"`
-	AllowBom    bool     `yaml:"allow-bom"`
-	AllowEmoji  bool     `yaml:"allow-emoji"`
-	AllowEscape bool     `yaml:"allow-escape"`
-	BlockBase64  int      `yaml:"block-base64"`
-	SkipBase64   []string `yaml:"skip-base64"`
-	Gitignore   bool     `yaml:"gitignore"`
-	HideSkipped bool     `yaml:"hide-skipped"`
-	Quiet       bool     `yaml:"quiet"`
-	Skip        []string `yaml:"skip"`
-	SkipExt     []string `yaml:"skip-ext"`
-	Verbose     bool     `yaml:"verbose"`
+	All              bool     `yaml:"all"`
+	Allow            []string `yaml:"allow"`
+	AllowBell        bool     `yaml:"allow-bell"`
+	AllowBom         bool     `yaml:"allow-bom"`
+	AllowEmoji       bool     `yaml:"allow-emoji"`
+	AllowEscape      bool     `yaml:"allow-escape"`
+	BlockBase64      int      `yaml:"block-base64"`
+	SkipBase64       []string `yaml:"skip-base64"`
+	BlockConfusables string   `yaml:"block-confusables"`
+	SkipConfusables  []string `yaml:"skip-confusables"`
+	Gitignore        bool     `yaml:"gitignore"`
+	HideSkipped      bool     `yaml:"hide-skipped"`
+	Quiet            bool     `yaml:"quiet"`
+	Skip             []string `yaml:"skip"`
+	SkipExt          []string `yaml:"skip-ext"`
+	Verbose          bool     `yaml:"verbose"`
 }
 
 const configFileName = ".nobin.yaml"
@@ -622,22 +664,24 @@ func loadConfig(path string) (config, error) {
 
 func main() {
 	var (
-		quiet          bool
-		verbose        bool
-		all            bool
-		gitignore      bool
-		allowEscape    bool
-		allowEmoji     bool
-		allowBom       bool
-		allowBell      bool
-		hideSkipped    bool
-		diffBase       string
-		skipPatterns   []string
-		skipExts       []string
-		allowCodePts   []string
-		blockBase64Str   string
-		skipBase64       []string
-		configFlag       string
+		quiet               bool
+		verbose             bool
+		all                 bool
+		gitignore           bool
+		allowEscape         bool
+		allowEmoji          bool
+		allowBom            bool
+		allowBell           bool
+		hideSkipped         bool
+		diffBase            string
+		skipPatterns        []string
+		skipExts            []string
+		allowCodePts        []string
+		blockBase64Str      string
+		skipBase64          []string
+		blockConfusablesStr string
+		skipConfusables     []string
+		configFlag          string
 	)
 
 	rootCmd := &cobra.Command{
@@ -689,6 +733,9 @@ class), and {alt1,alt2} (alternation). For example:
 			if cmd.Flags().Changed("all") {
 				cfg.All = all
 			}
+			if cmd.Flags().Changed("block-confusables") {
+				cfg.BlockConfusables = blockConfusablesStr
+			}
 			if cmd.Flags().Changed("allow-bell") {
 				cfg.AllowBell = allowBell
 			}
@@ -718,6 +765,7 @@ class), and {alt1,alt2} (alternation). For example:
 			cfg.Allow = append(cfg.Allow, allowCodePts...)
 			cfg.Skip = append(cfg.Skip, skipPatterns...)
 			cfg.SkipBase64 = append(cfg.SkipBase64, skipBase64...)
+			cfg.SkipConfusables = append(cfg.SkipConfusables, skipConfusables...)
 			cfg.SkipExt = append(cfg.SkipExt, skipExts...)
 
 			// Build the allowed-runes set from merged config.
@@ -750,23 +798,31 @@ class), and {alt1,alt2} (alternation). For example:
 				blockBase64 = n
 			}
 
+			// Resolve --block-confusables mode to a RangeTable (or nil).
+			confusablesTable, err := confusablesTableForMode(cfg.BlockConfusables)
+			if err != nil {
+				return err
+			}
+
 			if cfgPath != "" && !cfg.Quiet {
 				fmt.Fprintf(os.Stderr, "Config: %s\n", cfgPath)
 			}
 
 			return run(dir, runOpts{
-				allowBom:     cfg.AllowBom,
-				allowRunes:   allowRunes,
-				quiet:        cfg.Quiet,
-				verbose:      cfg.Verbose,
-				all:          cfg.All,
-				gitignore:    cfg.Gitignore,
-				hideSkipped:  cfg.HideSkipped,
-				diffBase:     diffBase,
-				skipPatterns: cfg.Skip,
-				skipExts:     cfg.SkipExt,
-				blockBase64:  blockBase64,
-				skipBase64:   cfg.SkipBase64,
+				allowBom:        cfg.AllowBom,
+				allowRunes:      allowRunes,
+				quiet:           cfg.Quiet,
+				verbose:         cfg.Verbose,
+				all:             cfg.All,
+				gitignore:       cfg.Gitignore,
+				hideSkipped:     cfg.HideSkipped,
+				diffBase:        diffBase,
+				skipPatterns:    cfg.Skip,
+				skipExts:        cfg.SkipExt,
+				blockBase64:     blockBase64,
+				skipBase64:      cfg.SkipBase64,
+				confusables:     confusablesTable,
+				skipConfusables: cfg.SkipConfusables,
 			})
 		},
 	}
@@ -789,6 +845,9 @@ class), and {alt1,alt2} (alternation). For example:
 	f.StringSliceVar(&skipExts, "skip-ext", nil, "skip files with these extensions (comma-separated, without dot)")
 	f.StringVar(&blockBase64Str, "block-base64", "", "detect base64-encoded strings at least `N` characters long (default 32; override with =N, e.g. --block-base64=64)")
 	rootCmd.Flag("block-base64").NoOptDefVal = "32"
+	f.StringVar(&blockConfusablesStr, "block-confusables", "", "detect non-ASCII code points that mimic ASCII (`MODE`: alphanum, url, or strict; default alphanum; override with =MODE)")
+	rootCmd.Flag("block-confusables").NoOptDefVal = "alphanum"
+	f.StringArrayVar(&skipConfusables, "skip-confusables", nil, "skip confusable detection for paths matching glob `PATTERN` (repeatable)")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "nobin: %v\n", err)
@@ -797,18 +856,20 @@ class), and {alt1,alt2} (alternation). For example:
 }
 
 type runOpts struct {
-	quiet        bool
-	verbose      bool
-	all          bool
-	gitignore    bool
-	allowBom     bool
-	allowRunes   map[rune]bool
-	hideSkipped  bool
-	diffBase     string
-	skipPatterns     []string
-	skipExts         []string
-	blockBase64      int
-	skipBase64       []string
+	quiet           bool
+	verbose         bool
+	all             bool
+	gitignore       bool
+	allowBom        bool
+	allowRunes      map[rune]bool
+	hideSkipped     bool
+	diffBase        string
+	skipPatterns    []string
+	skipExts        []string
+	blockBase64     int
+	skipBase64      []string
+	confusables     *unicode.RangeTable
+	skipConfusables []string
 }
 
 func run(dir string, opts runOpts) error {
@@ -848,12 +909,30 @@ func run(dir string, opts runOpts) error {
 		}
 	}
 
+	// Record skip-confusables entries for the skipped report.
+	if opts.confusables != nil && len(opts.skipConfusables) > 0 {
+		for _, path := range lr.Files {
+			relPath, _ := filepath.Rel(dir, path)
+			if matched, pattern := matchesSkip(relPath, opts.skipConfusables); matched {
+				lr.Skipped = append(lr.Skipped, skippedEntry{
+					Path:   path,
+					Reason: fmt.Sprintf("--skip-confusables %s", pattern),
+				})
+			}
+		}
+	}
+
 	// Scan files in parallel.
 	workers := runtime.NumCPU()
 	ch := make(chan string, workers)
 	resultCh := make(chan *fileResult, workers)
 
-	sopts := scanOpts{allowBom: opts.allowBom, allowRunes: opts.allowRunes, blockBase64: opts.blockBase64}
+	sopts := scanOpts{
+		allowBom:    opts.allowBom,
+		allowRunes:  opts.allowRunes,
+		blockBase64: opts.blockBase64,
+		confusables: opts.confusables,
+	}
 
 	var wg sync.WaitGroup
 	for range workers {
@@ -862,10 +941,15 @@ func run(dir string, opts runOpts) error {
 			defer wg.Done()
 			for path := range ch {
 				fileOpts := sopts
+				relPath, _ := filepath.Rel(dir, path)
 				if fileOpts.blockBase64 > 0 && len(opts.skipBase64) > 0 {
-					relPath, _ := filepath.Rel(dir, path)
 					if matched, _ := matchesSkip(relPath, opts.skipBase64); matched {
 						fileOpts.blockBase64 = 0
+					}
+				}
+				if fileOpts.confusables != nil && len(opts.skipConfusables) > 0 {
+					if matched, _ := matchesSkip(relPath, opts.skipConfusables); matched {
+						fileOpts.confusables = nil
 					}
 				}
 				if r := scanFile(path, fileOpts); r != nil {
@@ -905,7 +989,7 @@ func run(dir string, opts runOpts) error {
 					m.Reason)
 			}
 		default:
-			charCount := r.MatchCount - r.Base64Count
+			charCount := r.MatchCount - r.Base64Count - r.ConfusableCount
 			var parts []string
 			if charCount > 0 {
 				label := "match"
@@ -916,6 +1000,9 @@ func run(dir string, opts runOpts) error {
 			}
 			if r.Base64Count > 0 {
 				parts = append(parts, fmt.Sprintf("%d base64", r.Base64Count))
+			}
+			if r.ConfusableCount > 0 {
+				parts = append(parts, fmt.Sprintf("%d confusable", r.ConfusableCount))
 			}
 			fmt.Printf("%-60s  %s\n", r.Path, strings.Join(parts, " + "))
 		}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // --- test helpers --------------------------------------------------------
@@ -360,7 +361,7 @@ func TestScanBase64(t *testing.T) {
 func TestScanBytesBlockBase64(t *testing.T) {
 	t.Run("disabled by default", func(t *testing.T) {
 		data := []byte(testBase64String(100) + "\n")
-		_, total, _ := scanBytes(data, scanOpts{})
+		_, total, _, _ := scanBytes(data, scanOpts{})
 		if total != 0 {
 			t.Errorf("base64 detection should be off by default, got %d matches", total)
 		}
@@ -368,7 +369,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("detects when enabled", func(t *testing.T) {
 		data := []byte(testBase64String(100) + "\n")
-		matches, total, _ := scanBytes(data, scanOpts{blockBase64: 32})
+		matches, total, _, _ := scanBytes(data, scanOpts{blockBase64: 32})
 		if total != 1 {
 			t.Fatalf("expected 1 match, got %d", total)
 		}
@@ -379,7 +380,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("ignores pure hex", func(t *testing.T) {
 		data := []byte(testHexString(100) + "\n")
-		_, total, _ := scanBytes(data, scanOpts{blockBase64: 32})
+		_, total, _, _ := scanBytes(data, scanOpts{blockBase64: 32})
 		if total != 0 {
 			t.Errorf("pure hex should not match, got %d matches", total)
 		}
@@ -387,7 +388,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("combined with rune detection", func(t *testing.T) {
 		data := []byte("hello\x00world\n" + testBase64String(100) + "\n")
-		matches, total, _ := scanBytes(data, scanOpts{blockBase64: 32})
+		matches, total, _, _ := scanBytes(data, scanOpts{blockBase64: 32})
 		if total != 2 {
 			t.Fatalf("expected 2 matches (1 rune + 1 base64), got %d", total)
 		}
@@ -406,20 +407,20 @@ func TestScanBytesBomAllowed(t *testing.T) {
 	bom := []byte("\xef\xbb\xbfhello\n")
 
 	// Default: BOM flagged
-	_, total, _ := scanBytes(bom, scanOpts{})
+	_, total, _, _ := scanBytes(bom, scanOpts{})
 	if total != 1 {
 		t.Errorf("BOM should be flagged by default, got %d matches", total)
 	}
 
 	// With allowBom: BOM at start suppressed
-	_, total, _ = scanBytes(bom, scanOpts{allowBom: true})
+	_, total, _, _ = scanBytes(bom, scanOpts{allowBom: true})
 	if total != 0 {
 		t.Errorf("BOM at start should be allowed with allowBom, got %d matches", total)
 	}
 
 	// Mid-file FEFF still flagged even with allowBom
 	mid := []byte("x\xef\xbb\xbfy\n")
-	_, total, _ = scanBytes(mid, scanOpts{allowBom: true})
+	_, total, _, _ = scanBytes(mid, scanOpts{allowBom: true})
 	if total != 1 {
 		t.Errorf("mid-file FEFF should still be flagged, got %d matches", total)
 	}
@@ -491,7 +492,7 @@ func TestScanBytes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matches, total, _ := scanBytes(tt.content, scanOpts{})
+			matches, total, _, _ := scanBytes(tt.content, scanOpts{})
 			gotMatches := total > 0
 
 			if gotMatches != tt.wantMatches {
@@ -522,7 +523,7 @@ func TestScanBytes(t *testing.T) {
 func TestScanBytesPosition(t *testing.T) {
 	// Forbidden char at line 2, col 5
 	content := []byte("abcd\nefgh\xe2\x80\x8bijk\n")
-	matches, total, _ := scanBytes(content, scanOpts{})
+	matches, total, _, _ := scanBytes(content, scanOpts{})
 	if total != 1 {
 		t.Fatalf("expected 1 match, got %d", total)
 	}
@@ -537,7 +538,7 @@ func TestScanBytesPosition(t *testing.T) {
 func TestScanBytesTruncation(t *testing.T) {
 	// Build a file with 100 null bytes — well over maxMatchesPerFile.
 	data := make([]byte, 100)
-	matches, total, _ := scanBytes(data, scanOpts{})
+	matches, total, _, _ := scanBytes(data, scanOpts{})
 	if total != 100 {
 		t.Errorf("total = %d, want 100", total)
 	}
@@ -1284,5 +1285,304 @@ func TestEndToEndSkipBase64(t *testing.T) {
 	}
 	if !strings.Contains(out, "mixed.txt") {
 		t.Errorf("mixed.txt should still be flagged for NUL, got:\n%s", out)
+	}
+}
+
+// --- latinConfusables tables ---------------------------------------------
+
+func TestLatinConfusablesAlphanum(t *testing.T) {
+	// Letters and digits — present in all three modes; alphanum is the
+	// narrowest, so testing it implies presence in url and strict.
+	confusable := []struct {
+		name string
+		r    rune
+	}{
+		{"Cyrillic small a", 0x0430},
+		{"Cyrillic capital Er (→ P)", 0x0420},
+		{"Greek small alpha", 0x03B1},
+		{"Cherokee A", 0x13A0},
+		{"Fullwidth small a", 0xFF41},
+		{"Math bold small a", 0x1D41A},
+		{"Math fraktur small a", 0x1D51E},
+		{"Fullwidth digit 0", 0xFF10},
+	}
+	for _, tt := range confusable {
+		t.Run("confusable/"+tt.name, func(t *testing.T) {
+			if !unicode.Is(latinConfusablesAlphanum, tt.r) {
+				t.Errorf("%U should be in alphanum confusables", tt.r)
+			}
+		})
+	}
+
+	clean := []struct {
+		name string
+		r    rune
+	}{
+		{"ASCII a", 'a'},
+		{"ASCII Z", 'Z'},
+		{"ASCII digit 5", '5'},
+		{"Cyrillic Zhe (no Latin lookalike)", 0x0416},
+		{"Cyrillic Ya (no Latin lookalike)", 0x042F},
+		{"CJK middle", 0x4E2D},
+		{"Party popper emoji", 0x1F389},
+		{"Arabic letter meem", 0x0645},
+	}
+	for _, tt := range clean {
+		t.Run("clean/"+tt.name, func(t *testing.T) {
+			if unicode.Is(latinConfusablesAlphanum, tt.r) {
+				t.Errorf("%U should not be in alphanum confusables", tt.r)
+			}
+		})
+	}
+}
+
+func TestLatinConfusablesModeProgression(t *testing.T) {
+	// Codepoints whose target characters demonstrate the mode tiers.
+	tests := []struct {
+		name       string
+		r          rune
+		inAlphanum bool
+		inURL      bool
+		inStrict   bool
+	}{
+		// Letter confusable: in every mode.
+		{"Cyrillic а (→ a)", 0x0430, true, true, true},
+		// One-dot leader (→ .): URL/strict only — `.` is not alphanum.
+		{"One dot leader (→ .)", 0x2024, false, true, true},
+		// En dash (→ -): URL/strict only.
+		{"En dash (→ -)", 0x2013, false, true, true},
+		// Right single quotation (→ '): strict only — `'` is not URL.
+		{"Right single quote (→ ')", 0x2019, false, false, true},
+		// Horizontal ellipsis (→ ...): URL/strict — `.` is in URL.
+		{"Ellipsis (→ ...)", 0x2026, false, true, true},
+		// Heavy right angle (→ >): strict only — `>` is not URL.
+		{"Heavy right angle (→ >)", 0x276F, false, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := unicode.Is(latinConfusablesAlphanum, tt.r); got != tt.inAlphanum {
+				t.Errorf("alphanum: %U = %v, want %v", tt.r, got, tt.inAlphanum)
+			}
+			if got := unicode.Is(latinConfusablesURL, tt.r); got != tt.inURL {
+				t.Errorf("url: %U = %v, want %v", tt.r, got, tt.inURL)
+			}
+			if got := unicode.Is(latinConfusablesStrict, tt.r); got != tt.inStrict {
+				t.Errorf("strict: %U = %v, want %v", tt.r, got, tt.inStrict)
+			}
+		})
+	}
+}
+
+func TestConfusablesTableForMode(t *testing.T) {
+	tests := []struct {
+		mode    string
+		want    *unicode.RangeTable
+		wantErr bool
+	}{
+		{"", nil, false},
+		{"alphanum", latinConfusablesAlphanum, false},
+		{"url", latinConfusablesURL, false},
+		{"strict", latinConfusablesStrict, false},
+		{"bogus", nil, true},
+		{"ALPHANUM", nil, true}, // case-sensitive
+	}
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			got, err := confusablesTableForMode(tt.mode)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error for mode %q", tt.mode)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("table mismatch for mode %q", tt.mode)
+			}
+		})
+	}
+}
+
+// --- scanBytes: block-confusables integration ----------------------------
+
+func TestScanBytesBlockConfusables(t *testing.T) {
+	// Cyrillic small 'a' (U+0430), UTF-8: D0 B0.
+	const cyA = "\xd0\xb0"
+
+	t.Run("disabled by default", func(t *testing.T) {
+		data := []byte("p" + cyA + "ypal.com\n")
+		_, total, _, _ := scanBytes(data, scanOpts{})
+		if total != 0 {
+			t.Errorf("confusable detection should be off by default, got %d matches", total)
+		}
+	})
+
+	t.Run("detects when enabled", func(t *testing.T) {
+		data := []byte("p" + cyA + "ypal.com\n")
+		matches, total, _, confusable := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum})
+		if total != 1 {
+			t.Fatalf("expected 1 match, got %d", total)
+		}
+		if confusable != 1 {
+			t.Errorf("confusableCount = %d, want 1", confusable)
+		}
+		if !strings.Contains(matches[0].Reason, "U+0430") {
+			t.Errorf("reason should include U+0430, got: %s", matches[0].Reason)
+		}
+		if !strings.Contains(matches[0].Reason, "Latin confusable") {
+			t.Errorf("reason should mention Latin confusable, got: %s", matches[0].Reason)
+		}
+	})
+
+	t.Run("allowRunes suppresses specific code point", func(t *testing.T) {
+		data := []byte("p" + cyA + "ypal.com\n")
+		opts := scanOpts{
+			confusables: latinConfusablesAlphanum,
+			allowRunes:  map[rune]bool{0x0430: true},
+		}
+		_, total, _, _ := scanBytes(data, opts)
+		if total != 0 {
+			t.Errorf("allowRunes should suppress the confusable, got %d matches", total)
+		}
+	})
+
+	t.Run("ASCII-only content not flagged", func(t *testing.T) {
+		data := []byte("paypal.com\n")
+		_, total, _, _ := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum})
+		if total != 0 {
+			t.Errorf("pure ASCII should not trigger confusable flag, got %d matches", total)
+		}
+	})
+
+	t.Run("non-Latin script without Latin lookalike not flagged", func(t *testing.T) {
+		// Ж (U+0416) is Cyrillic but does not resemble any Latin letter.
+		data := []byte("\xd0\x96\n")
+		_, total, _, _ := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum})
+		if total != 0 {
+			t.Errorf("non-confusable Cyrillic should not flag, got %d matches", total)
+		}
+	})
+
+	t.Run("fullwidth URL all flagged", func(t *testing.T) {
+		// ｐａｙｐａｌ — six fullwidth letters, all Latin confusables.
+		data := []byte("\xef\xbd\x90\xef\xbd\x81\xef\xbd\x99\xef\xbd\x90\xef\xbd\x81\xef\xbd\x8c\n")
+		_, total, _, confusable := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum})
+		if total != 6 {
+			t.Errorf("expected 6 fullwidth matches, got %d", total)
+		}
+		if confusable != 6 {
+			t.Errorf("confusableCount = %d, want 6", confusable)
+		}
+	})
+
+	t.Run("combined with rune detection", func(t *testing.T) {
+		// NUL + Cyrillic 'a' → two distinct categories, separate counts.
+		data := []byte("\x00p" + cyA + "y\n")
+		_, total, _, confusable := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum})
+		if total != 2 {
+			t.Fatalf("expected 2 matches (1 NUL + 1 confusable), got %d", total)
+		}
+		if confusable != 1 {
+			t.Errorf("confusableCount = %d, want 1", confusable)
+		}
+	})
+}
+
+// --- End-to-end: block-confusables ---------------------------------------
+
+func TestEndToEndBlockConfusables(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+	// URL with Cyrillic 'a' (U+0430) substituted for Latin 'a'.
+	os.WriteFile(filepath.Join(dir, "spoof.txt"),
+		[]byte("https://p\xd0\xb0ypal.com\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "clean.txt"),
+		[]byte("https://paypal.com\n"), 0644)
+
+	// Without --block-confusables: both files pass (non-ASCII is fine).
+	cmd := exec.Command("go", "run", ".", "--quiet", dir)
+	if err := cmd.Run(); err != nil {
+		t.Errorf("without --block-confusables, should exit 0: %v", err)
+	}
+
+	// With --block-confusables: spoof.txt is flagged.
+	cmd = exec.Command("go", "run", ".", "--block-confusables", "--quiet", dir)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Error("with --block-confusables, expected non-zero exit")
+	}
+	out := string(output)
+	if !strings.Contains(out, "spoof.txt") {
+		t.Errorf("expected spoof.txt in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "clean.txt") {
+		t.Errorf("clean.txt should not appear, got:\n%s", out)
+	}
+
+	// Verbose: reason includes the U+XXXX code point.
+	cmd = exec.Command("go", "run", ".", "--block-confusables", "--verbose", dir)
+	output, _ = cmd.CombinedOutput()
+	if !strings.Contains(string(output), "U+0430") {
+		t.Errorf("verbose output should include U+0430, got:\n%s", string(output))
+	}
+}
+
+func TestEndToEndSkipConfusables(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+	// File with confusable AND a forbidden character.
+	os.WriteFile(filepath.Join(dir, "mixed.txt"),
+		[]byte("https://p\xd0\xb0ypal.com\nhello\x00world\n"), 0644)
+	// File with only a confusable.
+	os.WriteFile(filepath.Join(dir, "conf.txt"),
+		[]byte("https://p\xd0\xb0ypal.com\n"), 0644)
+
+	// --block-confusables alone: both files flagged.
+	cmd := exec.Command("go", "run", ".", "--block-confusables", "--quiet", dir)
+	output, _ := cmd.CombinedOutput()
+	out := string(output)
+	if !strings.Contains(out, "mixed.txt") {
+		t.Errorf("expected mixed.txt flagged, got:\n%s", out)
+	}
+	if !strings.Contains(out, "conf.txt") {
+		t.Errorf("expected conf.txt flagged, got:\n%s", out)
+	}
+
+	// --skip-confusables for mixed.txt: still flagged for NUL.
+	cmd = exec.Command("go", "run", ".", "--block-confusables",
+		"--skip-confusables", "mixed.txt", "--quiet", dir)
+	output, _ = cmd.CombinedOutput()
+	out = string(output)
+	if !strings.Contains(out, "mixed.txt") {
+		t.Errorf("mixed.txt should still be flagged for NUL, got:\n%s", out)
+	}
+	if !strings.Contains(out, "conf.txt") {
+		t.Errorf("conf.txt should still be flagged, got:\n%s", out)
+	}
+
+	// --skip-confusables for conf.txt: entry appears in the skipped report.
+	cmd = exec.Command("go", "run", ".", "--block-confusables",
+		"--skip-confusables", "conf.txt", dir)
+	output, _ = cmd.CombinedOutput()
+	if !strings.Contains(string(output), "--skip-confusables conf.txt") {
+		t.Errorf("expected skip-confusables entry in skipped report, got:\n%s",
+			string(output))
+	}
+
+	// --skip-confusables for conf.txt: conf.txt should be clean.
+	cmd = exec.Command("go", "run", ".", "--block-confusables",
+		"--skip-confusables", "conf.txt", "--quiet", dir)
+	output, _ = cmd.CombinedOutput()
+	out = string(output)
+	if strings.Contains(out, "conf.txt") {
+		t.Errorf("conf.txt should be clean with --skip-confusables, got:\n%s", out)
 	}
 }
