@@ -36,16 +36,18 @@ go build -o nobin .
 ## Usage
 
 ```
-nobin [directory] [flags]
+nobin [path] [flags]
 ```
 
-nobin assumes all text files are UTF-8. Files in other encodings
-(ISO-8859, UTF-16, etc.) will be reported as containing invalid UTF-8
-bytes — this is intentional, since non-UTF-8 source files are
-themselves a problem worth catching.
+The path can be a directory or a single file. nobin assumes all text
+files are UTF-8 and reports other encodings (ISO-8859, UTF-16, etc.)
+as invalid UTF-8 bytes — this is intentional, since non-UTF-8 source
+files are themselves a problem worth catching.
 
 By default, nobin scans every file under the given directory (or the
-current directory), excluding only `.git`. It exits 0 if all files are
+current directory), excluding only `.git`. With a single file as
+target, nobin scans just that file and ignores the path-pattern skip
+flags — you named it explicitly. It exits 0 if all scanned files are
 clean, 1 if any issues are found.
 
 ### Examples

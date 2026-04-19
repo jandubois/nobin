@@ -1279,6 +1279,73 @@ func TestEndToEnd(t *testing.T) {
 	}
 }
 
+func TestEndToEndSingleFile(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+	dirty := filepath.Join(dir, "dirty.js")
+	clean := filepath.Join(dir, "clean.js")
+	os.WriteFile(dirty, []byte("const x = \"\xe2\x80\x8b\";\n"), 0644)
+	os.WriteFile(clean, []byte("const x = 42;\n"), 0644)
+
+	t.Run("scans dirty file", func(t *testing.T) {
+		cmd := exec.Command("go", "run", ".", "--quiet", dirty)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Error("expected non-zero exit for dirty file")
+		}
+		if !strings.Contains(string(output), "dirty.js") {
+			t.Errorf("expected dirty.js in output, got:\n%s", output)
+		}
+	})
+
+	t.Run("clean file exits 0", func(t *testing.T) {
+		cmd := exec.Command("go", "run", ".", "--quiet", clean)
+		if err := cmd.Run(); err != nil {
+			t.Errorf("clean file should exit 0: %v", err)
+		}
+	})
+
+	t.Run("--diff with file errors", func(t *testing.T) {
+		cmd := exec.Command("go", "run", ".", "--diff", "main", dirty)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Error("--diff with single file should error")
+		}
+		if !strings.Contains(string(output), "--diff requires a directory") {
+			t.Errorf("expected --diff error, got:\n%s", output)
+		}
+	})
+
+	t.Run("--skip ignored for single file", func(t *testing.T) {
+		// User explicitly named the file; --skip pattern matching the
+		// file's name must not silence it.
+		cmd := exec.Command("go", "run", ".", "--skip", "dirty.js", "--quiet", dirty)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Error("--skip should not silence an explicitly-named file")
+		}
+		if !strings.Contains(string(output), "dirty.js") {
+			t.Errorf("expected dirty.js in output, got:\n%s", output)
+		}
+	})
+
+	t.Run("config from file's directory", func(t *testing.T) {
+		// Place an .nobin.yaml in the same directory as the target file
+		// that allows U+200B; the dirty file should then scan clean.
+		os.WriteFile(filepath.Join(dir, ".nobin.yaml"),
+			[]byte("allow:\n  - U+200B\n"), 0644)
+		t.Cleanup(func() { os.Remove(filepath.Join(dir, ".nobin.yaml")) })
+
+		cmd := exec.Command("go", "run", ".", "--quiet", dirty)
+		if err := cmd.Run(); err != nil {
+			t.Errorf("config in file's directory should apply: %v", err)
+		}
+	})
+}
+
 func TestEndToEndSkip(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not in PATH")

@@ -825,9 +825,9 @@ func main() {
 	)
 
 	rootCmd := &cobra.Command{
-		Use:   "nobin [directory]",
+		Use:   "nobin [path]",
 		Short: "Scan for non-printable and invisible characters",
-		Long: `Scan a directory for files containing non-printable or invisible characters:
+		Long: `Scan a directory or single file for non-printable or invisible characters:
 ASCII controls, zero-width Unicode, bidi overrides, variation selectors
 (Glassworm-style), private-use area, and invalid UTF-8. All files are
 assumed to be UTF-8; other encodings are reported as invalid.
@@ -851,14 +851,21 @@ class), and {alt1,alt2} (alternation). For example:
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir := "."
+			target := "."
 			if len(args) > 0 {
-				dir = args[0]
+				target = args[0]
+			}
+
+			// Config search starts from the target's directory whether
+			// the user passed a directory or a single file.
+			configSearchDir := target
+			if fi, err := os.Stat(target); err == nil && !fi.IsDir() {
+				configSearchDir = filepath.Dir(target)
 			}
 
 			// Load config file.
 			var cfg config
-			cfgPath, err := findConfigFile(configFlag, dir)
+			cfgPath, err := findConfigFile(configFlag, configSearchDir)
 			if err != nil {
 				return err
 			}
@@ -948,7 +955,7 @@ class), and {alt1,alt2} (alternation). For example:
 				fmt.Fprintf(os.Stderr, "Config: %s\n", cfgPath)
 			}
 
-			return run(dir, runOpts{
+			return run(target, runOpts{
 				allowBom:        cfg.AllowBom,
 				allowRunes:      allowRunes,
 				quiet:           cfg.Quiet,
@@ -1013,28 +1020,44 @@ type runOpts struct {
 	skipConfusables []string
 }
 
-func run(dir string, opts runOpts) error {
-	info, err := os.Stat(dir)
+func run(target string, opts runOpts) error {
+	info, err := os.Stat(target)
 	if err != nil {
 		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", dir)
 	}
 
-	lr, err := listFiles(dir, listOpts{
-		diffBase:     opts.diffBase,
-		all:          opts.all,
-		gitignore:    opts.gitignore,
-		skipPatterns: opts.skipPatterns,
-		skipExts:     opts.skipExts,
-	})
-	if err != nil {
-		return err
+	// Single-file mode: scan exactly that file. Skip patterns and
+	// listing options stop applying — the user explicitly named it.
+	singleFile := !info.IsDir()
+	if singleFile {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", target)
+		}
+		if opts.diffBase != "" {
+			return fmt.Errorf("--diff requires a directory, got file %s", target)
+		}
+	}
+
+	lr := &fileListResult{}
+	dir := target
+	if singleFile {
+		lr.Files = []string{target}
+		dir = filepath.Dir(target)
+	} else {
+		lr, err = listFiles(target, listOpts{
+			diffBase:     opts.diffBase,
+			all:          opts.all,
+			gitignore:    opts.gitignore,
+			skipPatterns: opts.skipPatterns,
+			skipExts:     opts.skipExts,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	if !opts.quiet {
-		fmt.Fprintf(os.Stderr, "Scanning %s (%d files) ...\n", dir, len(lr.Files))
+		fmt.Fprintf(os.Stderr, "Scanning %s (%d files) ...\n", target, len(lr.Files))
 	}
 
 	// Scan every file with full detection. The post-scan filter below
@@ -1082,6 +1105,12 @@ func run(dir string, opts runOpts) error {
 
 	results := make([]*fileResult, 0, len(raw))
 	for _, r := range raw {
+		// Single-file mode bypasses post-scan skip patterns: the user
+		// named the file explicitly, so report whatever it has.
+		if singleFile {
+			results = append(results, r)
+			continue
+		}
 		filtered := applySkips(r, dir, opts.skipPatterns, opts.skipBase64, opts.skipConfusables)
 		lr.Skipped = append(lr.Skipped, filtered.skipped...)
 		if filtered.kept != nil {
