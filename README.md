@@ -298,6 +298,8 @@ flagged while letting prose use real typographic punctuation.
 
 ## Background
 
+### Invisible-character smuggling
+
 In October 2025, [Koi Security discovered
 Glassworm](https://www.truesec.com/hub/blog/glassworm-self-propagating-vscode-extension),
 a self-propagating worm that hides malicious JavaScript payloads inside
@@ -309,6 +311,25 @@ reconstructs the payload and passes it to `eval()`.
 
 nobin detects these characters, along with all other non-printable and
 non-text content that has no place in source code.
+
+### Homograph attacks
+
+In 2017, security researcher Xudong Zheng demonstrated a
+[homograph attack](https://en.wikipedia.org/wiki/IDN_homograph_attack)
+by registering `xn--80ak6aa92e.com`, which Chrome and Firefox
+displayed as `аpple.com` — with a Cyrillic `а` (U+0430) where
+Latin `a` belongs. The proof of concept prompted both browsers to
+tighten their IDN display policies the same week.
+
+Source code is just as susceptible. An attacker who substitutes
+Cyrillic `а` for Latin `a`, Cherokee `Ꭺ` for Latin `A`, fullwidth
+`ｐａｙｐａｌ` for `paypal`, or any of roughly 1800 other Unicode code
+points can hide a fake URL or identifier inside a comment, string
+literal, or import path that survives code review unchanged.
+
+nobin's `--block-confusables` flag detects every non-ASCII code point
+whose Unicode skeleton or NFKC form folds to ASCII, denying the
+attacker any path to a Latin-looking string with a hidden swap.
 
 ## License
 
