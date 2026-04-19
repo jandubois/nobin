@@ -830,6 +830,64 @@ func TestListFilesAllIncludesGitDir(t *testing.T) {
 	}
 }
 
+// --- allowHint -----------------------------------------------------------
+
+func TestAllowHint(t *testing.T) {
+	cases := []struct {
+		name string
+		r    rune
+		want string
+	}{
+		{"BEL", 0x07, "--allow-bell"},
+		{"ESC", 0x1B, "--allow-escape"},
+		{"VS15", 0xFE0E, "--allow-emoji"},
+		{"VS16", 0xFE0F, "--allow-emoji"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatReason(tt.r)
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("formatReason(%U) = %q, want substring %q", tt.r, got, tt.want)
+			}
+		})
+	}
+
+	// Code points without a dedicated flag get no hint.
+	silent := []rune{0x00, 0x200B, 0x202E, 0xFE00}
+	for _, r := range silent {
+		t.Run(fmt.Sprintf("no-hint/U+%04X", r), func(t *testing.T) {
+			got := formatReason(r)
+			if strings.Contains(got, "--allow-") {
+				t.Errorf("formatReason(%U) = %q, should not include --allow- hint", r, got)
+			}
+		})
+	}
+
+	// BOM hint lives outside formatReason because it only fires at the
+	// start of a file. Exercise it through scanBytes.
+	t.Run("BOM at file start", func(t *testing.T) {
+		matches, _, _, _ := scanBytes([]byte("\xef\xbb\xbfhello\n"),
+			scanOpts{maxMatches: defaultMaxMatches})
+		if len(matches) != 1 {
+			t.Fatalf("expected 1 match, got %d", len(matches))
+		}
+		if !strings.Contains(matches[0].Reason, "--allow-bom") {
+			t.Errorf("BOM reason should suggest --allow-bom, got: %s", matches[0].Reason)
+		}
+	})
+
+	t.Run("U+FEFF mid-file gets no BOM hint", func(t *testing.T) {
+		matches, _, _, _ := scanBytes([]byte("x\xef\xbb\xbfy\n"),
+			scanOpts{maxMatches: defaultMaxMatches})
+		if len(matches) != 1 {
+			t.Fatalf("expected 1 match, got %d", len(matches))
+		}
+		if strings.Contains(matches[0].Reason, "--allow-bom") {
+			t.Errorf("mid-file U+FEFF should not suggest --allow-bom, got: %s", matches[0].Reason)
+		}
+	})
+}
+
 // --- runeDescription -----------------------------------------------------
 
 func TestRuneDescription(t *testing.T) {

@@ -167,7 +167,22 @@ var knownNames = map[rune]string{
 }
 
 func formatReason(r rune) string {
-	return fmt.Sprintf("U+%04X %s", r, runeDescription(r))
+	return fmt.Sprintf("U+%04X %s", r, runeDescription(r)) + allowHint(r)
+}
+
+// allowHint returns the dedicated --allow-X flag for code points that
+// have one, suitable for appending to a verbose reason string. Other
+// code points have no shortcut and rely on the generic --allow.
+func allowHint(r rune) string {
+	switch r {
+	case 0x07:
+		return " (allow with --allow-bell)"
+	case 0x1B:
+		return " (allow with --allow-escape)"
+	case 0xFE0E, 0xFE0F:
+		return " (allow with --allow-emoji)"
+	}
+	return ""
 }
 
 // --- Base64 detection ----------------------------------------------------
@@ -291,7 +306,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 			if total < opts.maxMatches {
 				reason := formatReason(r)
 				if r == 0xFEFF && i == 0 {
-					reason = "U+FEFF BOM (byte order mark)"
+					reason = "U+FEFF BOM (byte order mark) (allow with --allow-bom)"
 				}
 				matches = append(matches, match{
 					Line:   line,
