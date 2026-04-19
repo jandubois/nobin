@@ -738,7 +738,9 @@ func TestHasSkippedExt(t *testing.T) {
 	}
 }
 
-func TestListFilesSkipPattern(t *testing.T) {
+func TestListFilesIgnoresSkipPatterns(t *testing.T) {
+	// listFiles no longer applies --skip; the post-scan filter does, so
+	// every regular file (minus --skip-ext and .git) reaches the scanner.
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "vendor", "pkg"), 0755)
 	os.WriteFile(filepath.Join(dir, "vendor", "pkg", "lib.go"), []byte("package pkg\n"), 0644)
@@ -749,20 +751,18 @@ func TestListFilesSkipPattern(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	got := map[string]bool{}
 	for _, f := range lr.Files {
-		if strings.Contains(f, "vendor") {
-			t.Errorf("vendor files should be skipped, got: %s", f)
-		}
+		got[filepath.Base(f)] = true
 	}
-	// vendor/ should appear in skipped
-	found := false
+	if !got["lib.go"] {
+		t.Error("vendor/pkg/lib.go should reach the scanner")
+	}
+	if !got["main.go"] {
+		t.Error("main.go should reach the scanner")
+	}
 	for _, s := range lr.Skipped {
-		if strings.Contains(s.Path, "vendor") {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("vendor should appear in skipped entries")
+		t.Errorf("listFiles should not produce --skip entries, got %+v", s)
 	}
 }
 
@@ -1224,18 +1224,123 @@ func TestEndToEndSkip(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "vendor"), 0755)
 	os.WriteFile(filepath.Join(dir, "vendor", "lib.go"),
-		[]byte("package lib\x00\n"), 0644)
+		[]byte("package lib\x00\n"), 0644) // would trigger
+	os.WriteFile(filepath.Join(dir, "vendor", "clean.go"),
+		[]byte("package clean\n"), 0644) // clean
 	os.WriteFile(filepath.Join(dir, "main.go"),
 		[]byte("package main\n"), 0644)
 
-	// Skip vendor — should not report vendor/lib.go as an issue.
+	// Quiet mode: Skipped is suppressed, so vendor/lib.go should not
+	// surface as an issue, and the run should exit 0.
 	cmd := exec.Command("go", "run", ".", "--skip", "vendor", "--quiet", dir)
-	output, _ := cmd.CombinedOutput()
-	out := string(output)
-
-	if strings.Contains(out, "vendor") {
-		t.Errorf("vendor should be skipped, got:\n%s", out)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Errorf("--skip should keep exit 0 even when suppressed file would trigger: %v\n%s", err, output)
 	}
+	if strings.Contains(string(output), "vendor") {
+		t.Errorf("--quiet should not surface vendor in regular output, got:\n%s", output)
+	}
+
+	// Default mode: vendor/lib.go appears in Skipped (it would have hit),
+	// vendor/clean.go does not (no hits to report).
+	cmd = exec.Command("go", "run", ".", "--skip", "vendor", dir)
+	output, _ = cmd.CombinedOutput()
+	out := string(output)
+	if !strings.Contains(out, "Skipped:") {
+		t.Errorf("expected Skipped section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "vendor/lib.go") {
+		t.Errorf("vendor/lib.go should appear in Skipped (would have triggered), got:\n%s", out)
+	}
+	if strings.Contains(out, "vendor/clean.go") {
+		t.Errorf("vendor/clean.go should not appear in Skipped (no hits), got:\n%s", out)
+	}
+}
+
+func TestApplySkips(t *testing.T) {
+	dir := "/repo"
+	makeResult := func(path string, runeN, base64N, confusableN int) *fileResult {
+		ms := []match{}
+		for i := 0; i < runeN; i++ {
+			ms = append(ms, match{Reason: "rune", Kind: matchRune})
+		}
+		for i := 0; i < base64N; i++ {
+			ms = append(ms, match{Reason: "b64", Kind: matchBase64})
+		}
+		for i := 0; i < confusableN; i++ {
+			ms = append(ms, match{Reason: "conf", Kind: matchConfusable})
+		}
+		return &fileResult{
+			Path:            filepath.Join(dir, path),
+			Matches:         ms,
+			MatchCount:      runeN + base64N + confusableN,
+			Base64Count:     base64N,
+			ConfusableCount: confusableN,
+		}
+	}
+
+	t.Run("--skip suppresses entire file", func(t *testing.T) {
+		r := makeResult("vendor/foo.go", 2, 1, 0)
+		got := applySkips(r, dir, []string{"vendor"}, nil, nil)
+		if got.kept != nil {
+			t.Errorf("expected kept=nil, got %+v", got.kept)
+		}
+		if len(got.skipped) != 1 || !strings.Contains(got.skipped[0].Reason, "--skip vendor") {
+			t.Errorf("expected one --skip entry, got %+v", got.skipped)
+		}
+	})
+
+	t.Run("--skip-base64 trims only base64", func(t *testing.T) {
+		r := makeResult("test/data.go", 1, 3, 0)
+		got := applySkips(r, dir, nil, []string{"test/*"}, nil)
+		if got.kept == nil {
+			t.Fatal("expected kept != nil (rune match remains)")
+		}
+		if got.kept.MatchCount != 1 || got.kept.Base64Count != 0 {
+			t.Errorf("kept counts = match %d base64 %d, want 1/0",
+				got.kept.MatchCount, got.kept.Base64Count)
+		}
+		if len(got.skipped) != 1 || !strings.Contains(got.skipped[0].Reason, "3 base64") {
+			t.Errorf("expected --skip-base64 entry with count 3, got %+v", got.skipped)
+		}
+	})
+
+	t.Run("--skip-confusables trims only confusables", func(t *testing.T) {
+		r := makeResult("i18n/foo.go", 0, 0, 5)
+		got := applySkips(r, dir, nil, nil, []string{"i18n/*"})
+		if got.kept != nil {
+			t.Errorf("expected kept=nil (only confusables, all dropped), got %+v", got.kept)
+		}
+		if len(got.skipped) != 1 || !strings.Contains(got.skipped[0].Reason, "5 confusable") {
+			t.Errorf("expected --skip-confusables entry with count 5, got %+v", got.skipped)
+		}
+	})
+
+	t.Run("non-matching file passes through untouched", func(t *testing.T) {
+		r := makeResult("src/main.go", 2, 0, 0)
+		got := applySkips(r, dir, []string{"vendor"}, []string{"test/*"}, nil)
+		if got.kept == nil {
+			t.Fatal("expected kept != nil for non-matching file")
+		}
+		if got.kept.MatchCount != 2 {
+			t.Errorf("MatchCount = %d, want 2", got.kept.MatchCount)
+		}
+		if len(got.skipped) != 0 {
+			t.Errorf("expected no skipped entries, got %+v", got.skipped)
+		}
+	})
+
+	t.Run("--skip beats per-category skips", func(t *testing.T) {
+		r := makeResult("vendor/foo.go", 0, 5, 0)
+		got := applySkips(r, dir,
+			[]string{"vendor"}, []string{"vendor/*"}, nil)
+		if got.kept != nil {
+			t.Error("expected kept=nil")
+		}
+		if len(got.skipped) != 1 || !strings.Contains(got.skipped[0].Reason, "--skip vendor") {
+			t.Errorf("expected only --skip entry, got %+v", got.skipped)
+		}
+	})
 }
 
 func TestEndToEndBlockBase64(t *testing.T) {

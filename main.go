@@ -39,10 +39,22 @@ func parseCodePoint(s string) (rune, error) {
 
 // --- Types ---------------------------------------------------------------
 
+// matchKind classifies a match so the post-scan skip filter can drop
+// hits of one category without disturbing the others.
+type matchKind int
+
+const (
+	matchRune       matchKind = iota // forbidden char or invalid UTF-8
+	matchBase64                      // base64-encoded data run
+	matchConfusable                  // Latin-confusable code point
+	matchSummary                     // truncation summary (synthetic)
+)
+
 type match struct {
 	Line   int
 	Col    int
 	Reason string
+	Kind   matchKind
 }
 
 type fileResult struct {
@@ -267,6 +279,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 					Line:   line,
 					Col:    col,
 					Reason: fmt.Sprintf("0x%02X invalid UTF-8", data[i]),
+					Kind:   matchRune,
 				})
 			}
 		} else if r == 0xFEFF && i == 0 && opts.allowBom {
@@ -282,6 +295,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 					Line:   line,
 					Col:    col,
 					Reason: reason,
+					Kind:   matchRune,
 				})
 			}
 		} else if opts.confusables != nil && !opts.allowRunes[r] && unicode.Is(opts.confusables, r) {
@@ -292,6 +306,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 					Line:   line,
 					Col:    col,
 					Reason: fmt.Sprintf("U+%04X Latin confusable", r),
+					Kind:   matchConfusable,
 				})
 			}
 		}
@@ -313,6 +328,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 			total++
 			base64Count++
 			if total <= maxMatchesPerFile {
+				m.Kind = matchBase64
 				matches = append(matches, m)
 			}
 		}
@@ -322,6 +338,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 	if total > maxMatchesPerFile {
 		matches = append(matches, match{
 			Reason: fmt.Sprintf("... and %d more matches", total-maxMatchesPerFile),
+			Kind:   matchSummary,
 		})
 	}
 
@@ -345,6 +362,118 @@ func scanFile(path string, opts scanOpts) *fileResult {
 		Base64Count:     base64Count,
 		ConfusableCount: confusableCount,
 	}
+}
+
+// --- Post-scan skip filter ----------------------------------------------
+
+// skipFilterResult is the outcome of applying skip patterns to one
+// scanned file. kept is the (possibly trimmed) result to report
+// normally; nil means every hit was suppressed. skipped collects one
+// entry per pattern that silenced something.
+type skipFilterResult struct {
+	kept    *fileResult
+	skipped []skippedEntry
+}
+
+// applySkips evaluates the three pattern-based skip flags against a
+// scanned file's hits. Files matching --skip drop out entirely;
+// per-category skips trim only that category, leaving the rest.
+func applySkips(r *fileResult, dir string, skip, skipBase64, skipConfusables []string) skipFilterResult {
+	relPath, _ := filepath.Rel(dir, r.Path)
+
+	if matched, pattern := matchesSkip(relPath, skip); matched {
+		return skipFilterResult{
+			skipped: []skippedEntry{{
+				Path:   r.Path,
+				Reason: fmt.Sprintf("--skip %s (%s)", pattern, summarizeCounts(r.MatchCount, r.Base64Count, r.ConfusableCount)),
+			}},
+		}
+	}
+
+	matches := r.Matches
+	matchCount := r.MatchCount
+	base64Count := r.Base64Count
+	confusableCount := r.ConfusableCount
+	var skipped []skippedEntry
+
+	if base64Count > 0 && len(skipBase64) > 0 {
+		if matched, pattern := matchesSkip(relPath, skipBase64); matched {
+			skipped = append(skipped, skippedEntry{
+				Path:   r.Path,
+				Reason: fmt.Sprintf("--skip-base64 %s (%d base64)", pattern, base64Count),
+			})
+			matches = dropMatchKind(matches, matchBase64)
+			matchCount -= base64Count
+			base64Count = 0
+		}
+	}
+
+	if confusableCount > 0 && len(skipConfusables) > 0 {
+		if matched, pattern := matchesSkip(relPath, skipConfusables); matched {
+			skipped = append(skipped, skippedEntry{
+				Path:   r.Path,
+				Reason: fmt.Sprintf("--skip-confusables %s (%d confusable)", pattern, confusableCount),
+			})
+			matches = dropMatchKind(matches, matchConfusable)
+			matchCount -= confusableCount
+			confusableCount = 0
+		}
+	}
+
+	if matchCount == 0 {
+		return skipFilterResult{skipped: skipped}
+	}
+
+	// Re-derive the truncation summary from the surviving counts.
+	matches = dropMatchKind(matches, matchSummary)
+	if matchCount > len(matches) {
+		matches = append(matches, match{
+			Reason: fmt.Sprintf("... and %d more matches", matchCount-len(matches)),
+			Kind:   matchSummary,
+		})
+	}
+
+	return skipFilterResult{
+		kept: &fileResult{
+			Path:            r.Path,
+			Matches:         matches,
+			MatchCount:      matchCount,
+			Base64Count:     base64Count,
+			ConfusableCount: confusableCount,
+		},
+		skipped: skipped,
+	}
+}
+
+func dropMatchKind(in []match, drop matchKind) []match {
+	out := make([]match, 0, len(in))
+	for _, m := range in {
+		if m.Kind != drop {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// summarizeCounts renders the same "N matches + M base64 + K confusable"
+// breakdown used in the regular per-file output.
+func summarizeCounts(total, base64, confusable int) string {
+	rune := total - base64 - confusable
+	var parts []string
+	if rune > 0 {
+		label := "match"
+		if rune != 1 {
+			label = "matches"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", rune, label))
+	}
+	if base64 > 0 {
+		parts = append(parts, fmt.Sprintf("%d base64", base64))
+	}
+	if confusable > 0 {
+		parts = append(parts, fmt.Sprintf("%d confusable", confusable))
+	}
+	return strings.Join(parts, " + ")
 }
 
 // --- Skip matching -------------------------------------------------------
@@ -441,34 +570,21 @@ func listFiles(dir string, opts listOpts) (*fileListResult, error) {
 		result.Files, result.Skipped = applyFilters(files, dir, opts)
 
 	default:
+		// --skip patterns no longer prune the walk: every file gets
+		// scanned so the post-scan filter can flag skipped files that
+		// would have triggered. Only --skip-ext (binary pre-filter)
+		// and the default .git exclusion still cut the walk short.
 		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
 			if d.IsDir() {
-				name := d.Name()
-				if name == ".git" && !opts.all {
-					return filepath.SkipDir
-				}
-				relPath, _ := filepath.Rel(dir, path)
-				if matched, pattern := matchesSkip(relPath, opts.skipPatterns); matched {
-					result.Skipped = append(result.Skipped, skippedEntry{
-						Path:   path + "/",
-						Reason: fmt.Sprintf("--skip %s", pattern),
-					})
+				if d.Name() == ".git" && !opts.all {
 					return filepath.SkipDir
 				}
 				return nil
 			}
 			if !d.Type().IsRegular() {
-				return nil
-			}
-			relPath, _ := filepath.Rel(dir, path)
-			if matched, pattern := matchesSkip(relPath, opts.skipPatterns); matched {
-				result.Skipped = append(result.Skipped, skippedEntry{
-					Path:   path,
-					Reason: fmt.Sprintf("--skip %s", pattern),
-				})
 				return nil
 			}
 			if matched, ext := hasSkippedExt(path, opts.skipExts); matched {
@@ -489,19 +605,15 @@ func listFiles(dir string, opts listOpts) (*fileListResult, error) {
 	return result, nil
 }
 
-func applyFilters(raw []string, dir string, opts listOpts) ([]string, []skippedEntry) {
+// applyFilters processes a precomputed file list (from git ls-files or
+// git diff). Only --skip-ext is honored here; --skip patterns are
+// evaluated post-scan in run() so suppressed files can be reported
+// only when they would have triggered.
+func applyFilters(raw []string, _ string, opts listOpts) ([]string, []skippedEntry) {
 	var files []string
 	var skipped []skippedEntry
 
 	for _, f := range raw {
-		relPath, _ := filepath.Rel(dir, f)
-		if matched, pattern := matchesSkip(relPath, opts.skipPatterns); matched {
-			skipped = append(skipped, skippedEntry{
-				Path:   f,
-				Reason: fmt.Sprintf("--skip %s", pattern),
-			})
-			continue
-		}
 		if matched, ext := hasSkippedExt(f, opts.skipExts); matched {
 			skipped = append(skipped, skippedEntry{
 				Path:   f,
@@ -899,33 +1011,10 @@ func run(dir string, opts runOpts) error {
 		fmt.Fprintf(os.Stderr, "Scanning %s (%d files) ...\n", dir, len(lr.Files))
 	}
 
-	// Record skip-base64 entries for the skipped report.
-	if opts.blockBase64 > 0 && len(opts.skipBase64) > 0 {
-		for _, path := range lr.Files {
-			relPath, _ := filepath.Rel(dir, path)
-			if matched, pattern := matchesSkip(relPath, opts.skipBase64); matched {
-				lr.Skipped = append(lr.Skipped, skippedEntry{
-					Path:   path,
-					Reason: fmt.Sprintf("--skip-base64 %s", pattern),
-				})
-			}
-		}
-	}
-
-	// Record skip-confusables entries for the skipped report.
-	if opts.confusables != nil && len(opts.skipConfusables) > 0 {
-		for _, path := range lr.Files {
-			relPath, _ := filepath.Rel(dir, path)
-			if matched, pattern := matchesSkip(relPath, opts.skipConfusables); matched {
-				lr.Skipped = append(lr.Skipped, skippedEntry{
-					Path:   path,
-					Reason: fmt.Sprintf("--skip-confusables %s", pattern),
-				})
-			}
-		}
-	}
-
-	// Scan files in parallel.
+	// Scan every file with full detection. The post-scan filter below
+	// applies --skip / --skip-base64 / --skip-confusables, suppressing
+	// hits silently and surfacing each suppressed file in the Skipped
+	// report only when it would otherwise have triggered.
 	workers := runtime.NumCPU()
 	ch := make(chan string, workers)
 	resultCh := make(chan *fileResult, workers)
@@ -943,19 +1032,7 @@ func run(dir string, opts runOpts) error {
 		go func() {
 			defer wg.Done()
 			for path := range ch {
-				fileOpts := sopts
-				relPath, _ := filepath.Rel(dir, path)
-				if fileOpts.blockBase64 > 0 && len(opts.skipBase64) > 0 {
-					if matched, _ := matchesSkip(relPath, opts.skipBase64); matched {
-						fileOpts.blockBase64 = 0
-					}
-				}
-				if fileOpts.confusables != nil && len(opts.skipConfusables) > 0 {
-					if matched, _ := matchesSkip(relPath, opts.skipConfusables); matched {
-						fileOpts.confusables = nil
-					}
-				}
-				if r := scanFile(path, fileOpts); r != nil {
+				if r := scanFile(path, sopts); r != nil {
 					resultCh <- r
 				}
 			}
@@ -971,9 +1048,18 @@ func run(dir string, opts runOpts) error {
 		close(resultCh)
 	}()
 
-	var results []*fileResult
+	var raw []*fileResult
 	for r := range resultCh {
-		results = append(results, r)
+		raw = append(raw, r)
+	}
+
+	results := make([]*fileResult, 0, len(raw))
+	for _, r := range raw {
+		filtered := applySkips(r, dir, opts.skipPatterns, opts.skipBase64, opts.skipConfusables)
+		lr.Skipped = append(lr.Skipped, filtered.skipped...)
+		if filtered.kept != nil {
+			results = append(results, filtered.kept)
+		}
 	}
 
 	sort.Slice(results, func(i, j int) bool {
@@ -992,22 +1078,8 @@ func run(dir string, opts runOpts) error {
 					m.Reason)
 			}
 		default:
-			charCount := r.MatchCount - r.Base64Count - r.ConfusableCount
-			var parts []string
-			if charCount > 0 {
-				label := "match"
-				if charCount != 1 {
-					label = "matches"
-				}
-				parts = append(parts, fmt.Sprintf("%d %s", charCount, label))
-			}
-			if r.Base64Count > 0 {
-				parts = append(parts, fmt.Sprintf("%d base64", r.Base64Count))
-			}
-			if r.ConfusableCount > 0 {
-				parts = append(parts, fmt.Sprintf("%d confusable", r.ConfusableCount))
-			}
-			fmt.Printf("%-60s  %s\n", r.Path, strings.Join(parts, " + "))
+			fmt.Printf("%-60s  %s\n", r.Path,
+				summarizeCounts(r.MatchCount, r.Base64Count, r.ConfusableCount))
 		}
 	}
 

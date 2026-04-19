@@ -133,7 +133,16 @@ Quote patterns containing wildcards to prevent shell expansion:
 - `--skip '**/*.{woff,woff2}'` skips woff and woff2 files at any depth.
 - `--skip 'pkg/**/fonts/**'` skips everything under any `fonts` directory below `pkg`.
 
-Skipped entries appear in the output so you know coverage is incomplete.
+nobin scans every file regardless of `--skip`, `--skip-base64`, and
+`--skip-confusables`, then decides what to show. The Skipped report
+lists only suppressed files that *would* have triggered, along with
+the silenced hit counts. Skip-matched files with no hits stay
+invisible. The exit status considers only the regular output, so
+silencing a real hit still produces a clean exit.
+
+`--skip-ext` is the one exception: it stops nobin from opening the
+file at all — the right call for known binaries like images — so
+those entries always show up in the Skipped report without a count.
 
 ### Output modes
 
