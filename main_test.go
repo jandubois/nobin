@@ -46,7 +46,7 @@ func TestIsForbidden(t *testing.T) {
 	}
 	for _, tt := range allowed {
 		t.Run("allow/"+tt.name, func(t *testing.T) {
-			if isForbidden(tt.r, scanOpts{}) {
+			if isForbidden(tt.r, scanOpts{maxMatches: defaultMaxMatches}) {
 				t.Errorf("isForbidden(%U) = true, want false", tt.r)
 			}
 		})
@@ -90,7 +90,7 @@ func TestIsForbidden(t *testing.T) {
 	}
 	for _, tt := range forbidden {
 		t.Run("forbid/"+tt.name, func(t *testing.T) {
-			if !isForbidden(tt.r, scanOpts{}) {
+			if !isForbidden(tt.r, scanOpts{maxMatches: defaultMaxMatches}) {
 				t.Errorf("isForbidden(%U) = false, want true", tt.r)
 			}
 		})
@@ -103,11 +103,11 @@ func TestIsForbidden(t *testing.T) {
 		for _, r := range runes {
 			m[r] = true
 		}
-		return scanOpts{allowRunes: m}
+		return scanOpts{allowRunes: m, maxMatches: defaultMaxMatches}
 	}
 
 	t.Run("ESC/default", func(t *testing.T) {
-		if !isForbidden(0x1B, scanOpts{}) {
+		if !isForbidden(0x1B, scanOpts{maxMatches: defaultMaxMatches}) {
 			t.Error("ESC should be forbidden by default")
 		}
 	})
@@ -118,7 +118,7 @@ func TestIsForbidden(t *testing.T) {
 	})
 
 	t.Run("BEL/default", func(t *testing.T) {
-		if !isForbidden(0x07, scanOpts{}) {
+		if !isForbidden(0x07, scanOpts{maxMatches: defaultMaxMatches}) {
 			t.Error("BEL should be forbidden by default")
 		}
 	})
@@ -130,12 +130,12 @@ func TestIsForbidden(t *testing.T) {
 
 	// VS15/VS16 allowed via allowRunes; VS1 remains forbidden.
 	t.Run("VS15/default", func(t *testing.T) {
-		if !isForbidden(0xFE0E, scanOpts{}) {
+		if !isForbidden(0xFE0E, scanOpts{maxMatches: defaultMaxMatches}) {
 			t.Error("VS15 should be forbidden by default")
 		}
 	})
 	t.Run("VS16/default", func(t *testing.T) {
-		if !isForbidden(0xFE0F, scanOpts{}) {
+		if !isForbidden(0xFE0F, scanOpts{maxMatches: defaultMaxMatches}) {
 			t.Error("VS16 should be forbidden by default")
 		}
 	})
@@ -361,7 +361,7 @@ func TestScanBase64(t *testing.T) {
 func TestScanBytesBlockBase64(t *testing.T) {
 	t.Run("disabled by default", func(t *testing.T) {
 		data := []byte(testBase64String(100) + "\n")
-		_, total, _, _ := scanBytes(data, scanOpts{})
+		_, total, _, _ := scanBytes(data, scanOpts{maxMatches: defaultMaxMatches})
 		if total != 0 {
 			t.Errorf("base64 detection should be off by default, got %d matches", total)
 		}
@@ -369,7 +369,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("detects when enabled", func(t *testing.T) {
 		data := []byte(testBase64String(100) + "\n")
-		matches, total, _, _ := scanBytes(data, scanOpts{blockBase64: 32})
+		matches, total, _, _ := scanBytes(data, scanOpts{blockBase64: 32, maxMatches: defaultMaxMatches})
 		if total != 1 {
 			t.Fatalf("expected 1 match, got %d", total)
 		}
@@ -380,7 +380,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("ignores pure hex", func(t *testing.T) {
 		data := []byte(testHexString(100) + "\n")
-		_, total, _, _ := scanBytes(data, scanOpts{blockBase64: 32})
+		_, total, _, _ := scanBytes(data, scanOpts{blockBase64: 32, maxMatches: defaultMaxMatches})
 		if total != 0 {
 			t.Errorf("pure hex should not match, got %d matches", total)
 		}
@@ -388,7 +388,7 @@ func TestScanBytesBlockBase64(t *testing.T) {
 
 	t.Run("combined with rune detection", func(t *testing.T) {
 		data := []byte("hello\x00world\n" + testBase64String(100) + "\n")
-		matches, total, _, _ := scanBytes(data, scanOpts{blockBase64: 32})
+		matches, total, _, _ := scanBytes(data, scanOpts{blockBase64: 32, maxMatches: defaultMaxMatches})
 		if total != 2 {
 			t.Fatalf("expected 2 matches (1 rune + 1 base64), got %d", total)
 		}
@@ -407,20 +407,20 @@ func TestScanBytesBomAllowed(t *testing.T) {
 	bom := []byte("\xef\xbb\xbfhello\n")
 
 	// Default: BOM flagged
-	_, total, _, _ := scanBytes(bom, scanOpts{})
+	_, total, _, _ := scanBytes(bom, scanOpts{maxMatches: defaultMaxMatches})
 	if total != 1 {
 		t.Errorf("BOM should be flagged by default, got %d matches", total)
 	}
 
 	// With allowBom: BOM at start suppressed
-	_, total, _, _ = scanBytes(bom, scanOpts{allowBom: true})
+	_, total, _, _ = scanBytes(bom, scanOpts{allowBom: true, maxMatches: defaultMaxMatches})
 	if total != 0 {
 		t.Errorf("BOM at start should be allowed with allowBom, got %d matches", total)
 	}
 
 	// Mid-file FEFF still flagged even with allowBom
 	mid := []byte("x\xef\xbb\xbfy\n")
-	_, total, _, _ = scanBytes(mid, scanOpts{allowBom: true})
+	_, total, _, _ = scanBytes(mid, scanOpts{allowBom: true, maxMatches: defaultMaxMatches})
 	if total != 1 {
 		t.Errorf("mid-file FEFF should still be flagged, got %d matches", total)
 	}
@@ -492,7 +492,7 @@ func TestScanBytes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matches, total, _, _ := scanBytes(tt.content, scanOpts{})
+			matches, total, _, _ := scanBytes(tt.content, scanOpts{maxMatches: defaultMaxMatches})
 			gotMatches := total > 0
 
 			if gotMatches != tt.wantMatches {
@@ -523,7 +523,7 @@ func TestScanBytes(t *testing.T) {
 func TestScanBytesPosition(t *testing.T) {
 	// Forbidden char at line 2, col 5
 	content := []byte("abcd\nefgh\xe2\x80\x8bijk\n")
-	matches, total, _, _ := scanBytes(content, scanOpts{})
+	matches, total, _, _ := scanBytes(content, scanOpts{maxMatches: defaultMaxMatches})
 	if total != 1 {
 		t.Fatalf("expected 1 match, got %d", total)
 	}
@@ -536,20 +536,44 @@ func TestScanBytesPosition(t *testing.T) {
 // --- scanBytes: truncation -----------------------------------------------
 
 func TestScanBytesTruncation(t *testing.T) {
-	// Build a file with 100 null bytes — well over maxMatchesPerFile.
-	data := make([]byte, 100)
-	matches, total, _, _ := scanBytes(data, scanOpts{})
-	if total != 100 {
-		t.Errorf("total = %d, want 100", total)
-	}
-	if len(matches) != maxMatchesPerFile+1 {
-		t.Errorf("len(matches) = %d, want %d (cap + summary)",
-			len(matches), maxMatchesPerFile+1)
-	}
-	last := matches[len(matches)-1]
-	if !strings.Contains(last.Reason, "more matches") {
-		t.Errorf("last match should be truncation summary, got: %s", last.Reason)
-	}
+	data := make([]byte, 100) // 100 NULL bytes
+
+	t.Run("storage cap honored", func(t *testing.T) {
+		matches, total, _, _ := scanBytes(data, scanOpts{maxMatches: 20})
+		if total != 100 {
+			t.Errorf("total = %d, want 100", total)
+		}
+		if len(matches) != 21 {
+			t.Errorf("len(matches) = %d, want 21 (20 cap + summary)", len(matches))
+		}
+		last := matches[len(matches)-1]
+		if !strings.Contains(last.Reason, "80 more matches") {
+			t.Errorf("last match should report 80 more, got: %s", last.Reason)
+		}
+	})
+
+	t.Run("storage cap of 0 stores nothing", func(t *testing.T) {
+		matches, total, _, _ := scanBytes(data, scanOpts{maxMatches: 0})
+		if total != 100 {
+			t.Errorf("total = %d, want 100", total)
+		}
+		if len(matches) != 0 {
+			t.Errorf("len(matches) = %d, want 0 — counts still tracked, no storage", len(matches))
+		}
+	})
+
+	t.Run("custom storage cap", func(t *testing.T) {
+		matches, total, _, _ := scanBytes(data, scanOpts{maxMatches: 5})
+		if total != 100 {
+			t.Errorf("total = %d, want 100", total)
+		}
+		if len(matches) != 6 {
+			t.Errorf("len(matches) = %d, want 6 (5 cap + summary)", len(matches))
+		}
+		if !strings.Contains(matches[5].Reason, "95 more matches") {
+			t.Errorf("summary should say 95 more, got: %s", matches[5].Reason)
+		}
+	})
 }
 
 // --- scanFile (integration) ----------------------------------------------
@@ -559,24 +583,24 @@ func TestScanFile(t *testing.T) {
 
 	clean := filepath.Join(dir, "clean.js")
 	os.WriteFile(clean, []byte("const x = 42;\n"), 0644)
-	if r := scanFile(clean, scanOpts{}); r != nil {
+	if r := scanFile(clean, scanOpts{maxMatches: defaultMaxMatches}); r != nil {
 		t.Errorf("clean file produced %d matches", len(r.Matches))
 	}
 
 	dirty := filepath.Join(dir, "dirty.js")
 	os.WriteFile(dirty, []byte("const x = \"\xe2\x80\x8b\";\n"), 0644)
-	if r := scanFile(dirty, scanOpts{}); r == nil {
+	if r := scanFile(dirty, scanOpts{maxMatches: defaultMaxMatches}); r == nil {
 		t.Error("dirty file produced no matches")
 	}
 
 	empty := filepath.Join(dir, "empty.txt")
 	os.WriteFile(empty, []byte{}, 0644)
-	if r := scanFile(empty, scanOpts{}); r != nil {
+	if r := scanFile(empty, scanOpts{maxMatches: defaultMaxMatches}); r != nil {
 		t.Error("empty file should produce no matches")
 	}
 
 	missing := filepath.Join(dir, "missing.txt")
-	if r := scanFile(missing, scanOpts{}); r != nil {
+	if r := scanFile(missing, scanOpts{maxMatches: defaultMaxMatches}); r != nil {
 		t.Error("missing file should produce no matches")
 	}
 }
@@ -903,8 +927,8 @@ verbose: true
 		if len(cfg.SkipExt) != 2 || cfg.SkipExt[0] != "png" {
 			t.Errorf("SkipExt = %v, want [png jpg]", cfg.SkipExt)
 		}
-		if !cfg.Verbose {
-			t.Error("Verbose should be true")
+		if cfg.Verbose != defaultMaxMatches {
+			t.Errorf("Verbose = %d, want %d (verbose: true → defaultMaxMatches)", cfg.Verbose, defaultMaxMatches)
 		}
 	})
 
@@ -917,11 +941,50 @@ verbose: true
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.All || cfg.Quiet || cfg.Verbose || cfg.BlockBase64 != 0 {
+		if cfg.All || cfg.Quiet || cfg.Verbose != 0 || cfg.BlockBase64 != 0 {
 			t.Error("empty config should produce zero values")
 		}
 		if len(cfg.Skip) != 0 || len(cfg.SkipExt) != 0 || len(cfg.Allow) != 0 {
 			t.Error("empty config should have empty lists")
+		}
+	})
+
+	t.Run("verbose accepts integer", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "verbose-int.yaml")
+		os.WriteFile(path, []byte("verbose: 3\n"), 0644)
+
+		cfg, err := loadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Verbose != 3 {
+			t.Errorf("Verbose = %d, want 3", cfg.Verbose)
+		}
+	})
+
+	t.Run("verbose accepts false", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "verbose-false.yaml")
+		os.WriteFile(path, []byte("verbose: false\n"), 0644)
+
+		cfg, err := loadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Verbose != 0 {
+			t.Errorf("Verbose = %d, want 0 (verbose: false → 0)", cfg.Verbose)
+		}
+	})
+
+	t.Run("verbose rejects non-numeric string", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "verbose-bogus.yaml")
+		os.WriteFile(path, []byte("verbose: hello\n"), 0644)
+
+		_, err := loadConfig(path)
+		if err == nil {
+			t.Error("expected error for verbose: hello")
 		}
 	})
 
@@ -1608,7 +1671,7 @@ func TestScanBytesBlockConfusables(t *testing.T) {
 
 	t.Run("disabled by default", func(t *testing.T) {
 		data := []byte("p" + cyA + "ypal.com\n")
-		_, total, _, _ := scanBytes(data, scanOpts{})
+		_, total, _, _ := scanBytes(data, scanOpts{maxMatches: defaultMaxMatches})
 		if total != 0 {
 			t.Errorf("confusable detection should be off by default, got %d matches", total)
 		}
@@ -1616,7 +1679,7 @@ func TestScanBytesBlockConfusables(t *testing.T) {
 
 	t.Run("detects when enabled", func(t *testing.T) {
 		data := []byte("p" + cyA + "ypal.com\n")
-		matches, total, _, confusable := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum})
+		matches, total, _, confusable := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum, maxMatches: defaultMaxMatches})
 		if total != 1 {
 			t.Fatalf("expected 1 match, got %d", total)
 		}
@@ -1645,7 +1708,7 @@ func TestScanBytesBlockConfusables(t *testing.T) {
 
 	t.Run("ASCII-only content not flagged", func(t *testing.T) {
 		data := []byte("paypal.com\n")
-		_, total, _, _ := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum})
+		_, total, _, _ := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum, maxMatches: defaultMaxMatches})
 		if total != 0 {
 			t.Errorf("pure ASCII should not trigger confusable flag, got %d matches", total)
 		}
@@ -1654,7 +1717,7 @@ func TestScanBytesBlockConfusables(t *testing.T) {
 	t.Run("non-Latin script without Latin lookalike not flagged", func(t *testing.T) {
 		// Ж (U+0416) is Cyrillic but does not resemble any Latin letter.
 		data := []byte("\xd0\x96\n")
-		_, total, _, _ := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum})
+		_, total, _, _ := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum, maxMatches: defaultMaxMatches})
 		if total != 0 {
 			t.Errorf("non-confusable Cyrillic should not flag, got %d matches", total)
 		}
@@ -1663,7 +1726,7 @@ func TestScanBytesBlockConfusables(t *testing.T) {
 	t.Run("fullwidth URL all flagged", func(t *testing.T) {
 		// ｐａｙｐａｌ — six fullwidth letters, all Latin confusables.
 		data := []byte("\xef\xbd\x90\xef\xbd\x81\xef\xbd\x99\xef\xbd\x90\xef\xbd\x81\xef\xbd\x8c\n")
-		_, total, _, confusable := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum})
+		_, total, _, confusable := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum, maxMatches: defaultMaxMatches})
 		if total != 6 {
 			t.Errorf("expected 6 fullwidth matches, got %d", total)
 		}
@@ -1675,7 +1738,7 @@ func TestScanBytesBlockConfusables(t *testing.T) {
 	t.Run("combined with rune detection", func(t *testing.T) {
 		// NUL + Cyrillic 'a' → two distinct categories, separate counts.
 		data := []byte("\x00p" + cyA + "y\n")
-		_, total, _, confusable := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum})
+		_, total, _, confusable := scanBytes(data, scanOpts{confusables: latinConfusablesAlphanum, maxMatches: defaultMaxMatches})
 		if total != 2 {
 			t.Fatalf("expected 2 matches (1 NUL + 1 confusable), got %d", total)
 		}

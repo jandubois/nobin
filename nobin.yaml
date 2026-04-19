@@ -26,5 +26,5 @@ skip-confusables: []
 
 # Output
 quiet: false
-verbose: false
+verbose: false       # false = off, true = first 20, or set N directly
 hide-skipped: false

@@ -77,6 +77,7 @@ type scanOpts struct {
 	allowRunes  map[rune]bool
 	blockBase64 int
 	confusables *unicode.RangeTable // nil = disabled
+	maxMatches  int                 // cap on stored match details; 0 = none
 }
 
 // isForbidden returns true for characters that should not appear in source
@@ -254,10 +255,11 @@ func scanBase64(data []byte, minLen int) []match {
 
 // --- File scanning -------------------------------------------------------
 
-// maxMatchesPerFile caps the number of detailed matches stored per file.
-// Beyond this limit, only the total count is tracked. This prevents
-// multi-gigabyte allocations when scanning large binary files.
-const maxMatchesPerFile = 20
+// defaultMaxMatches is the verbose-mode default storage cap when the
+// user passes --verbose without a value. The cap exists to bound
+// memory on large binary files; raising it via --verbose=N also
+// raises the cap, since the scanner cannot show what it never stored.
+const defaultMaxMatches = 20
 
 // scanBytes checks content for forbidden characters and invalid UTF-8.
 func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
@@ -274,7 +276,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 		hit := false
 		if r == utf8.RuneError && size == 1 {
 			hit = true
-			if total < maxMatchesPerFile {
+			if total < opts.maxMatches {
 				matches = append(matches, match{
 					Line:   line,
 					Col:    col,
@@ -286,7 +288,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 			// BOM at file start — explicitly allowed.
 		} else if isForbidden(r, opts) {
 			hit = true
-			if total < maxMatchesPerFile {
+			if total < opts.maxMatches {
 				reason := formatReason(r)
 				if r == 0xFEFF && i == 0 {
 					reason = "U+FEFF BOM (byte order mark)"
@@ -301,7 +303,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 		} else if opts.confusables != nil && !opts.allowRunes[r] && unicode.Is(opts.confusables, r) {
 			hit = true
 			confusableCount++
-			if total < maxMatchesPerFile {
+			if total < opts.maxMatches {
 				matches = append(matches, match{
 					Line:   line,
 					Col:    col,
@@ -327,17 +329,17 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 		for _, m := range scanBase64(data, opts.blockBase64) {
 			total++
 			base64Count++
-			if total <= maxMatchesPerFile {
+			if total <= opts.maxMatches {
 				m.Kind = matchBase64
 				matches = append(matches, m)
 			}
 		}
 	}
 
-	// Append a summary if matches were truncated.
-	if total > maxMatchesPerFile {
+	// Append a truncation summary only when storage was active.
+	if opts.maxMatches > 0 && total > opts.maxMatches {
 		matches = append(matches, match{
-			Reason: fmt.Sprintf("... and %d more matches", total-maxMatchesPerFile),
+			Reason: fmt.Sprintf("... and %d more matches", total-opts.maxMatches),
 			Kind:   matchSummary,
 		})
 	}
@@ -721,7 +723,30 @@ type config struct {
 	Quiet            bool     `yaml:"quiet"`
 	Skip             []string `yaml:"skip"`
 	SkipExt          []string `yaml:"skip-ext"`
-	Verbose          bool     `yaml:"verbose"`
+	Verbose          verboseValue `yaml:"verbose"`
+}
+
+// verboseValue is an int that also accepts a YAML bool: `verbose: true`
+// becomes defaultMaxMatches, `verbose: false` becomes 0. This keeps
+// existing config files working after the flag became `--verbose=N`.
+type verboseValue int
+
+func (v *verboseValue) UnmarshalYAML(node *yaml.Node) error {
+	var i int
+	if err := node.Decode(&i); err == nil {
+		*v = verboseValue(i)
+		return nil
+	}
+	var b bool
+	if err := node.Decode(&b); err == nil {
+		if b {
+			*v = defaultMaxMatches
+		} else {
+			*v = 0
+		}
+		return nil
+	}
+	return fmt.Errorf("verbose: expected int or bool, got %q", node.Value)
 }
 
 const configFileName = ".nobin.yaml"
@@ -780,7 +805,7 @@ func loadConfig(path string) (config, error) {
 func main() {
 	var (
 		quiet               bool
-		verbose             bool
+		verbose             int
 		all                 bool
 		gitignore           bool
 		allowEscape         bool
@@ -873,7 +898,7 @@ class), and {alt1,alt2} (alternation). For example:
 				cfg.Quiet = quiet
 			}
 			if cmd.Flags().Changed("verbose") {
-				cfg.Verbose = verbose
+				cfg.Verbose = verboseValue(verbose)
 			}
 
 			// CLI lists extend config lists.
@@ -927,7 +952,7 @@ class), and {alt1,alt2} (alternation). For example:
 				allowBom:        cfg.AllowBom,
 				allowRunes:      allowRunes,
 				quiet:           cfg.Quiet,
-				verbose:         cfg.Verbose,
+				verbose:         int(cfg.Verbose),
 				all:             cfg.All,
 				gitignore:       cfg.Gitignore,
 				hideSkipped:     cfg.HideSkipped,
@@ -944,7 +969,8 @@ class), and {alt1,alt2} (alternation). For example:
 
 	f := rootCmd.Flags()
 	f.BoolVarP(&quiet, "quiet", "q", false, "print only file paths with issues")
-	f.BoolVarP(&verbose, "verbose", "v", false, "show line, column, and code point for each match")
+	f.IntVarP(&verbose, "verbose", "v", 0, "show line, column, and code point for the first `N` matches per file (default 20; override with =N, e.g. --verbose=3)")
+	rootCmd.Flag("verbose").NoOptDefVal = strconv.Itoa(defaultMaxMatches)
 	f.BoolVar(&all, "all", false, "include .git directory (excluded by default)")
 	f.BoolVar(&gitignore, "gitignore", false, "respect .gitignore rules")
 	f.BoolVar(&allowBell, "allow-bell", false, "allow BEL (0x07)")
@@ -972,7 +998,7 @@ class), and {alt1,alt2} (alternation). For example:
 
 type runOpts struct {
 	quiet           bool
-	verbose         bool
+	verbose         int
 	all             bool
 	gitignore       bool
 	allowBom        bool
@@ -1024,6 +1050,7 @@ func run(dir string, opts runOpts) error {
 		allowRunes:  opts.allowRunes,
 		blockBase64: opts.blockBase64,
 		confusables: opts.confusables,
+		maxMatches:  opts.verbose,
 	}
 
 	var wg sync.WaitGroup
@@ -1071,7 +1098,7 @@ func run(dir string, opts runOpts) error {
 		switch {
 		case opts.quiet:
 			fmt.Println(r.Path)
-		case opts.verbose:
+		case opts.verbose > 0:
 			for _, m := range r.Matches {
 				fmt.Printf("%-50s  %s\n",
 					fmt.Sprintf("%s:%d:%d", r.Path, m.Line, m.Col),

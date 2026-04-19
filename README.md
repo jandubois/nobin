@@ -109,7 +109,7 @@ nobin --block-confusables=strict ./my-repo     # all printable ASCII
       --skip-base64 PATTERN skip base64 detection for paths matching glob PATTERN (repeatable)
       --skip-confusables PATTERN skip confusable detection for paths matching glob PATTERN (repeatable)
       --skip-ext strings    skip files with these extensions (comma-separated, without dot)
-  -v, --verbose             show line, column, and code point for each match
+  -v, --verbose[=N]         show line, column, and code point for the first N matches per file (default 20)
 ```
 
 ### Skip patterns
@@ -153,15 +153,17 @@ src/server.go                           1 match
 lib/parser.js                           3 matches
 ```
 
-**Verbose** (`-v`) shows every match with its location and code point:
+**Verbose** (`-v`) shows each match with its location and code point:
 
 ```
 src/server.go:42:15                     U+200B ZERO WIDTH SPACE
 lib/parser.js:7:1                       U+202E RIGHT-TO-LEFT OVERRIDE
 ```
 
-Files with more than 20 matches (typically binaries) show the first 20
-and a summary of the rest.
+Bare `--verbose` shows the first 20 matches per file and tags the rest
+with a summary line. Pass `--verbose=N` to set a different cap — `=3`
+to keep output tight on dirty files, or `=200` to inspect a binary in
+full.
 
 **Quiet** (`-q`) prints only file paths, one per line, for use in scripts.
 
