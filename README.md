@@ -245,6 +245,14 @@ Each mode unions two data sources:
   the gap `confusables.txt` leaves for fullwidth digits and other
   compatibility forms.
 
+Every mode excludes source code points in Unicode General Category
+`No` (Number, Other): superscripts (¹²³ ⁰⁴-⁹), subscripts (₀-₉), and
+circled digits (①-⑳ ⓪ ㉑-㊿). They fold to ASCII digits via NFKC but
+render at a different size or with extra decoration, so they cannot
+pose as a Latin digit in a URL or identifier. Roman numerals (Ⅰ Ⅱ Ⅲ
+...) live in category `Nl` (Letter) and stay in the table — they pose
+as real Latin letters.
+
 The current data comes from Unicode 17.0.0. Regenerate the tables
 with `go generate ./...` after bumping the vendored `confusables.txt`.
 

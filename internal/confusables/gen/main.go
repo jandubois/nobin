@@ -81,6 +81,19 @@ func isPrintableASCII(r rune) bool {
 	return r >= 0x20 && r <= 0x7E
 }
 
+// isExcludedSource drops source code points that fold to ASCII via
+// NFKC but are visibly distinct from their ASCII targets. Currently
+// covers Unicode General Category No (Number, Other): superscripts
+// (¹²³ ⁰⁴-⁹), subscripts (₀-₉), and circled digits (①-⑳ ⓪ ㉑-㊿).
+// All render at a different size or with extra decoration, so they
+// can't pose as a Latin digit in a URL or identifier.
+//
+// Roman numerals (Ⅰ Ⅱ Ⅲ ...) are category Nl (Letter), not No, and
+// remain in the table — they are real letter homographs.
+func isExcludedSource(r rune) bool {
+	return unicode.Is(unicode.No, r)
+}
+
 type modeStats struct {
 	sources   map[rune]bool
 	entries   int
@@ -129,7 +142,7 @@ func main() {
 			continue
 		}
 		srcR := rune(src)
-		if srcR < 0x80 {
+		if srcR < 0x80 || isExcludedSource(srcR) {
 			continue
 		}
 
@@ -167,7 +180,7 @@ func main() {
 
 	// Augment each mode with codepoints whose NFKC form fits its alphabet.
 	for r := rune(0x80); r <= unicode.MaxRune; r++ {
-		if !utf8.ValidRune(r) {
+		if !utf8.ValidRune(r) || isExcludedSource(r) {
 			continue
 		}
 		folded := norm.NFKC.String(string(r))

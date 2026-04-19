@@ -945,7 +945,7 @@ func TestFindConfigFile(t *testing.T) {
 		path := filepath.Join(dir, "custom.yaml")
 		os.WriteFile(path, []byte("quiet: true\n"), 0644)
 
-		got, err := findConfigFile(path)
+		got, err := findConfigFile(path, dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -955,7 +955,7 @@ func TestFindConfigFile(t *testing.T) {
 	})
 
 	t.Run("explicit path missing", func(t *testing.T) {
-		_, err := findConfigFile("/nonexistent/path.yaml")
+		_, err := findConfigFile("/nonexistent/path.yaml", ".")
 		if err == nil {
 			t.Error("expected error for missing explicit config")
 		}
@@ -963,11 +963,7 @@ func TestFindConfigFile(t *testing.T) {
 
 	t.Run("no config returns empty", func(t *testing.T) {
 		dir := t.TempDir()
-		orig, _ := os.Getwd()
-		os.Chdir(dir)
-		defer os.Chdir(orig)
-
-		got, err := findConfigFile("")
+		got, err := findConfigFile("", dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -976,19 +972,63 @@ func TestFindConfigFile(t *testing.T) {
 		}
 	})
 
-	t.Run("finds in current directory", func(t *testing.T) {
+	t.Run("finds in scan directory", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, ".nobin.yaml"), []byte("quiet: true\n"), 0644)
-		orig, _ := os.Getwd()
-		os.Chdir(dir)
-		defer os.Chdir(orig)
+		want := filepath.Join(dir, ".nobin.yaml")
+		os.WriteFile(want, []byte("quiet: true\n"), 0644)
 
-		got, err := findConfigFile("")
+		got, err := findConfigFile("", dir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got != ".nobin.yaml" {
-			t.Errorf("got %q, want %q", got, ".nobin.yaml")
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("finds in scan directory's git root", func(t *testing.T) {
+		// Resolve symlinks because git rev-parse returns the canonical
+		// path, while t.TempDir on macOS hands out a symlinked path.
+		root, _ := filepath.EvalSymlinks(t.TempDir())
+		if out, err := exec.Command("git", "-C", root, "init", "--quiet").CombinedOutput(); err != nil {
+			t.Skipf("git init failed: %v: %s", err, out)
+		}
+		want := filepath.Join(root, ".nobin.yaml")
+		os.WriteFile(want, []byte("quiet: true\n"), 0644)
+
+		// Run from a sub-directory that lives inside the repo but does
+		// not itself contain a config; findConfigFile should walk up to
+		// the git root.
+		sub := filepath.Join(root, "pkg", "deep")
+		os.MkdirAll(sub, 0755)
+
+		got, err := findConfigFile("", sub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("finds config in scan target invoked from elsewhere", func(t *testing.T) {
+		// Regression: nobin /path/to/repo run from a different cwd
+		// must still find /path/to/repo/.nobin.yaml.
+		scan := t.TempDir()
+		want := filepath.Join(scan, ".nobin.yaml")
+		os.WriteFile(want, []byte("quiet: true\n"), 0644)
+
+		other := t.TempDir()
+		orig, _ := os.Getwd()
+		os.Chdir(other)
+		defer os.Chdir(orig)
+
+		got, err := findConfigFile("", scan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 }
@@ -1331,6 +1371,56 @@ func TestLatinConfusablesAlphanum(t *testing.T) {
 		t.Run("clean/"+tt.name, func(t *testing.T) {
 			if unicode.Is(latinConfusablesAlphanum, tt.r) {
 				t.Errorf("%U should not be in alphanum confusables", tt.r)
+			}
+		})
+	}
+}
+
+func TestLatinConfusablesExcludesNumberOther(t *testing.T) {
+	// Category No (Number, Other) folds to ASCII digits via NFKC but
+	// renders visibly smaller or decorated, so it can't pose as a
+	// Latin digit. The generator excludes all such code points.
+	excluded := []struct {
+		name string
+		r    rune
+	}{
+		{"superscript 2 (²)", 0x00B2},
+		{"superscript 9 (⁹)", 0x2079},
+		{"subscript 0 (₀)", 0x2080},
+		{"subscript 9 (₉)", 0x2089},
+		{"circled 1 (①)", 0x2460},
+		{"circled 0 (⓪)", 0x24EA},
+		{"double-circled 21 (㉑)", 0x3251},
+	}
+	for _, tt := range excluded {
+		t.Run("excluded/"+tt.name, func(t *testing.T) {
+			for _, table := range []*unicode.RangeTable{
+				latinConfusablesAlphanum,
+				latinConfusablesURL,
+				latinConfusablesStrict,
+			} {
+				if unicode.Is(table, tt.r) {
+					t.Errorf("%U should be excluded from all modes", tt.r)
+				}
+			}
+		})
+	}
+
+	// Roman numerals are category Nl (Letter), not No, so they remain
+	// in the table — they are real homographs of Latin letters.
+	romanLike := []struct {
+		name string
+		r    rune
+	}{
+		{"Roman I (Ⅰ)", 0x2160},
+		{"Roman V (Ⅴ)", 0x2164},
+		{"Roman X (Ⅹ)", 0x2169},
+		{"Roman x lowercase (ⅹ)", 0x2179},
+	}
+	for _, tt := range romanLike {
+		t.Run("kept/"+tt.name, func(t *testing.T) {
+			if !unicode.Is(latinConfusablesAlphanum, tt.r) {
+				t.Errorf("%U should remain in alphanum confusables", tt.r)
 			}
 		})
 	}

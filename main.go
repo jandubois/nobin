@@ -615,9 +615,10 @@ type config struct {
 const configFileName = ".nobin.yaml"
 
 // findConfigFile returns the path to the config file and any error.
-// It checks the explicit path first, then the current directory, then
-// the git repository root.
-func findConfigFile(explicit string) (string, error) {
+// It checks the explicit path first, then scanDir itself, then scanDir's
+// git repository root. This lets `nobin /path/to/repo` find the config
+// in /path/to/repo even when invoked from a different working directory.
+func findConfigFile(explicit, scanDir string) (string, error) {
 	if explicit != "" {
 		if _, err := os.Stat(explicit); err != nil {
 			return "", fmt.Errorf("config file: %w", err)
@@ -625,25 +626,27 @@ func findConfigFile(explicit string) (string, error) {
 		return explicit, nil
 	}
 
-	if _, err := os.Stat(configFileName); err == nil {
-		return configFileName, nil
+	scanPath := filepath.Join(scanDir, configFileName)
+	if _, err := os.Stat(scanPath); err == nil {
+		return scanPath, nil
 	}
 
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd := exec.Command("git", "-C", scanDir, "rev-parse", "--show-toplevel")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", nil
 	}
 	root := strings.TrimSpace(string(output))
-
-	cwd, err := os.Getwd()
-	if err != nil || root == cwd {
+	if root == "" {
 		return "", nil
 	}
 
-	path := filepath.Join(root, configFileName)
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
+	rootPath := filepath.Join(root, configFileName)
+	if rootPath == scanPath {
+		return "", nil
+	}
+	if _, err := os.Stat(rootPath); err == nil {
+		return rootPath, nil
 	}
 	return "", nil
 }
@@ -718,7 +721,7 @@ class), and {alt1,alt2} (alternation). For example:
 
 			// Load config file.
 			var cfg config
-			cfgPath, err := findConfigFile(configFlag)
+			cfgPath, err := findConfigFile(configFlag, dir)
 			if err != nil {
 				return err
 			}
