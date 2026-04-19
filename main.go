@@ -463,6 +463,22 @@ func dropMatchKind(in []match, drop matchKind) []match {
 	return out
 }
 
+// printAligned prints two-column rows with the left column padded to
+// the widest entry, so reason text lines up no matter how long the
+// paths get. prefix appears before each line (e.g. "  " for indented
+// Skipped entries).
+func printAligned(rows [][2]string, prefix string) {
+	width := 0
+	for _, row := range rows {
+		if n := len(row[0]); n > width {
+			width = n
+		}
+	}
+	for _, row := range rows {
+		fmt.Printf("%s%-*s  %s\n", prefix, width, row[0], row[1])
+	}
+}
+
 // summarizeCounts renders the same "N matches + M base64 + K confusable"
 // breakdown used in the regular per-file output.
 func summarizeCounts(total, base64, confusable int) string {
@@ -1135,21 +1151,33 @@ func run(target string, opts runOpts) error {
 		return results[i].Path < results[j].Path
 	})
 
-	// Output issues.
-	for _, r := range results {
-		switch {
-		case opts.quiet:
+	// Output issues, sized to the widest left-column entry so the
+	// reason column lines up regardless of path length.
+	switch {
+	case opts.quiet:
+		for _, r := range results {
 			fmt.Println(r.Path)
-		case opts.verbose > 0:
-			for _, m := range r.Matches {
-				fmt.Printf("%-50s  %s\n",
-					fmt.Sprintf("%s:%d:%d", r.Path, m.Line, m.Col),
-					m.Reason)
-			}
-		default:
-			fmt.Printf("%-60s  %s\n", r.Path,
-				summarizeCounts(r.MatchCount, r.Base64Count, r.ConfusableCount))
 		}
+	case opts.verbose > 0:
+		var rows [][2]string
+		for _, r := range results {
+			for _, m := range r.Matches {
+				rows = append(rows, [2]string{
+					fmt.Sprintf("%s:%d:%d", r.Path, m.Line, m.Col),
+					m.Reason,
+				})
+			}
+		}
+		printAligned(rows, "")
+	default:
+		rows := make([][2]string, 0, len(results))
+		for _, r := range results {
+			rows = append(rows, [2]string{
+				r.Path,
+				summarizeCounts(r.MatchCount, r.Base64Count, r.ConfusableCount),
+			})
+		}
+		printAligned(rows, "")
 	}
 
 	// Output skipped entries.
@@ -1159,9 +1187,11 @@ func run(target string, opts runOpts) error {
 		})
 		fmt.Println()
 		fmt.Println("Skipped:")
+		rows := make([][2]string, 0, len(lr.Skipped))
 		for _, s := range lr.Skipped {
-			fmt.Printf("  %-58s  %s\n", s.Path, s.Reason)
+			rows = append(rows, [2]string{s.Path, s.Reason})
 		}
+		printAligned(rows, "  ")
 	}
 
 	if !opts.quiet {
