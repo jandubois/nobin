@@ -67,7 +67,7 @@ jobs:
           echo 'EOF' >> $GITHUB_OUTPUT
 
       - name: Create release
-        uses: softprops/action-gh-release@1853d73993c8ca1b2c9c1a7fede39682d0ab5c2a # v2.5.3
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           files: |
             nobin-*
