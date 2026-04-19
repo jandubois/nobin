@@ -20,6 +20,7 @@ import (
 	"github.com/jandubois/nobin/version"
 	"github.com/spf13/cobra"
 	"go.yaml.in/yaml/v3"
+	"golang.org/x/text/unicode/runenames"
 )
 
 // parseCodePoint parses a Unicode code point from a hex string.
@@ -113,22 +114,26 @@ func isForbidden(r rune, opts scanOpts) bool {
 	return false
 }
 
-// runeDescription returns a human-readable name for a forbidden character.
+// runeDescription returns a human-readable name for a code point.
+// Most characters carry their official Unicode name (via runenames);
+// control characters lack names in Unicode, so a short alias table
+// fills the common ones (NULL, BELL, ESCAPE, ...). Unaliased
+// controls and Private Use code points fall back to category labels.
 func runeDescription(r rune) string {
-	if name, ok := knownNames[r]; ok {
+	name := runenames.Name(r)
+	if name != "" && !strings.HasPrefix(name, "<") {
 		return name
 	}
+	if alias, ok := controlAliases[r]; ok {
+		return alias
+	}
 	switch {
-	case r >= 0x01 && r <= 0x1F:
+	case r >= 0x00 && r <= 0x1F:
 		return "CONTROL"
 	case r == 0x7F:
 		return "DELETE"
 	case r >= 0x80 && r <= 0x9F:
 		return "CONTROL"
-	case r >= 0xFE00 && r <= 0xFE0F:
-		return fmt.Sprintf("VARIATION SELECTOR-%d", r-0xFE00+1)
-	case r >= 0xE0100 && r <= 0xE01EF:
-		return fmt.Sprintf("VARIATION SELECTOR-%d", r-0xE0100+17)
 	case unicode.Is(unicode.Co, r):
 		return "PRIVATE USE"
 	case unicode.Is(unicode.Cf, r):
@@ -138,32 +143,18 @@ func runeDescription(r rune) string {
 	}
 }
 
-var knownNames = map[rune]string{
-	0x00:   "NULL",
-	0x07:   "BELL",
-	0x08:   "BACKSPACE",
-	0x0B:   "VERTICAL TAB",
-	0x0C:   "FORM FEED",
-	0x1B:   "ESCAPE",
-	0x7F:   "DELETE",
-	0x85:   "NEXT LINE",
-	0xAD:   "SOFT HYPHEN",
-	0x200B: "ZERO WIDTH SPACE",
-	0x200C: "ZERO WIDTH NON-JOINER",
-	0x200D: "ZERO WIDTH JOINER",
-	0x200E: "LEFT-TO-RIGHT MARK",
-	0x200F: "RIGHT-TO-LEFT MARK",
-	0x202A: "LEFT-TO-RIGHT EMBEDDING",
-	0x202B: "RIGHT-TO-LEFT EMBEDDING",
-	0x202C: "POP DIRECTIONAL FORMATTING",
-	0x202D: "LEFT-TO-RIGHT OVERRIDE",
-	0x202E: "RIGHT-TO-LEFT OVERRIDE",
-	0x2060: "WORD JOINER",
-	0x2066: "LEFT-TO-RIGHT ISOLATE",
-	0x2067: "RIGHT-TO-LEFT ISOLATE",
-	0x2068: "FIRST STRONG ISOLATE",
-	0x2069: "POP DIRECTIONAL ISOLATE",
-	0xFEFF: "ZERO WIDTH NO-BREAK SPACE",
+// controlAliases supplies friendly names for the C0/C1 control code
+// points whose official Unicode Name property is empty. The aliases
+// match Unicode's published "Name_Alias" entries for these characters.
+var controlAliases = map[rune]string{
+	0x00: "NULL",
+	0x07: "BELL",
+	0x08: "BACKSPACE",
+	0x0B: "VERTICAL TAB",
+	0x0C: "FORM FEED",
+	0x1B: "ESCAPE",
+	0x7F: "DELETE",
+	0x85: "NEXT LINE",
 }
 
 func formatReason(r rune) string {
@@ -322,7 +313,7 @@ func scanBytes(data []byte, opts scanOpts) ([]match, int, int, int) {
 				matches = append(matches, match{
 					Line:   line,
 					Col:    col,
-					Reason: fmt.Sprintf("U+%04X Latin confusable", r),
+					Reason: formatReason(r) + " (Latin confusable)",
 					Kind:   matchConfusable,
 				})
 			}

@@ -906,6 +906,11 @@ func TestRuneDescription(t *testing.T) {
 		{0xE000, "PRIVATE USE"},
 		{0x03, "CONTROL"},
 		{0x90, "CONTROL"},
+		// Confusable code points should carry their Unicode names.
+		{0x0430, "CYRILLIC SMALL LETTER A"},
+		{0x03B1, "GREEK SMALL LETTER ALPHA"},
+		{0x13A0, "CHEROKEE LETTER A"},
+		{0xFF41, "FULLWIDTH LATIN SMALL LETTER A"},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("U+%04X", tt.r), func(t *testing.T) {
