@@ -1279,6 +1279,49 @@ func TestEndToEnd(t *testing.T) {
 	}
 }
 
+func TestEndToEndNoConfig(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "dirty.js"),
+		[]byte("const x = \"\xe2\x80\x8b\";\n"), 0644)
+	os.WriteFile(filepath.Join(dir, ".nobin.yaml"),
+		[]byte("allow:\n  - U+200B\n"), 0644)
+
+	t.Run("default loads config and scan stays clean", func(t *testing.T) {
+		cmd := exec.Command("go", "run", ".", "--quiet", dir)
+		if err := cmd.Run(); err != nil {
+			t.Errorf("config should allow U+200B and exit 0: %v", err)
+		}
+	})
+
+	t.Run("--no-config bypasses the config", func(t *testing.T) {
+		cmd := exec.Command("go", "run", ".", "--no-config", "--quiet", dir)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Error("--no-config should ignore the allow rule and trigger")
+		}
+		if !strings.Contains(string(output), "dirty.js") {
+			t.Errorf("expected dirty.js in output, got:\n%s", output)
+		}
+	})
+
+	t.Run("--no-config conflicts with --config", func(t *testing.T) {
+		cmd := exec.Command("go", "run", ".", "--no-config",
+			"--config", filepath.Join(dir, ".nobin.yaml"), dir)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Error("expected error when both flags are set")
+		}
+		if !strings.Contains(string(output), "mutually exclusive") &&
+			!strings.Contains(string(output), "none of the others") {
+			t.Errorf("expected mutual-exclusion error, got:\n%s", output)
+		}
+	})
+}
+
 func TestEndToEndSingleFile(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not in PATH")

@@ -822,6 +822,7 @@ func main() {
 		blockConfusablesStr string
 		skipConfusables     []string
 		configFlag          string
+		noConfig            bool
 	)
 
 	rootCmd := &cobra.Command{
@@ -863,16 +864,20 @@ class), and {alt1,alt2} (alternation). For example:
 				configSearchDir = filepath.Dir(target)
 			}
 
-			// Load config file.
+			// Load config file (unless --no-config short-circuits it).
 			var cfg config
-			cfgPath, err := findConfigFile(configFlag, configSearchDir)
-			if err != nil {
-				return err
-			}
-			if cfgPath != "" {
-				cfg, err = loadConfig(cfgPath)
+			var cfgPath string
+			if !noConfig {
+				var err error
+				cfgPath, err = findConfigFile(configFlag, configSearchDir)
 				if err != nil {
 					return err
+				}
+				if cfgPath != "" {
+					cfg, err = loadConfig(cfgPath)
+					if err != nil {
+						return err
+					}
 				}
 			}
 
@@ -986,7 +991,9 @@ class), and {alt1,alt2} (alternation). For example:
 	f.BoolVar(&allowEscape, "allow-escape", false, "allow ESC (0x1B) for ANSI terminal sequences")
 	f.StringArrayVar(&allowCodePts, "allow", nil, "allow a specific code point, as hex: U+FEFF, 0xFEFF, or FEFF (repeatable)")
 	f.BoolVar(&hideSkipped, "hide-skipped", false, "hide the list of skipped files from output")
-	f.StringVar(&configFlag, "config", "", "path to config file (default: .nobin.yaml in current directory or git root)")
+	f.StringVar(&configFlag, "config", "", "path to config file (default: .nobin.yaml in scan target or its git root)")
+	f.BoolVar(&noConfig, "no-config", false, "ignore any .nobin.yaml file and use only command-line flags")
+	rootCmd.MarkFlagsMutuallyExclusive("config", "no-config")
 	f.StringVar(&diffBase, "diff", "", "scan only files changed since BASE (branch, tag, or commit)")
 	f.StringArrayVar(&skipPatterns, "skip", nil, "skip paths matching glob `PATTERN` relative to scan root (repeatable)")
 	f.StringArrayVar(&skipBase64, "skip-base64", nil, "skip base64 detection for paths matching glob `PATTERN` (repeatable)")

@@ -102,7 +102,8 @@ nobin --block-confusables=strict ./my-repo     # all printable ASCII
       --allow-escape        allow ESC (0x1B) for ANSI terminal sequences
       --block-base64[=N]    detect base64-encoded strings of N+ characters (default 32)
       --block-confusables[=MODE]  detect non-ASCII code points that mimic ASCII (alphanum, url, or strict; default alphanum)
-      --config string       path to config file (default: .nobin.yaml in current directory or git root)
+      --config string       path to config file (default: .nobin.yaml in scan target or its git root)
+      --no-config           ignore any .nobin.yaml file and use only command-line flags
       --diff string         scan only files changed since BASE (branch, tag, or commit)
       --gitignore           respect .gitignore rules
       --hide-skipped        hide the list of skipped files from output
