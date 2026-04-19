@@ -420,7 +420,9 @@ func applySkips(r *fileResult, dir string, skip, skipBase64, skipConfusables []s
 		if matched, pattern := matchesSkip(relPath, skipConfusables); matched {
 			skipped = append(skipped, skippedEntry{
 				Path:   r.Path,
-				Reason: fmt.Sprintf("--skip-confusables %s (%d confusable)", pattern, confusableCount),
+				Reason: fmt.Sprintf("--skip-confusables %s (%d %s)",
+					pattern, confusableCount,
+					plural(confusableCount, "confusable", "confusables")),
 			})
 			matches = dropMatchKind(matches, matchConfusable)
 			matchCount -= confusableCount
@@ -479,23 +481,29 @@ func printAligned(rows [][2]string, prefix string) {
 	}
 }
 
-// summarizeCounts renders the same "N matches + M base64 + K confusable"
+// plural picks the right form based on count: 1 → singular, anything
+// else → plural. Doesn't try to inflect "base64" — it's a mass noun
+// like "data".
+func plural(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
+}
+
+// summarizeCounts renders the same "N matches + M base64 + K confusables"
 // breakdown used in the regular per-file output.
 func summarizeCounts(total, base64, confusable int) string {
-	rune := total - base64 - confusable
+	runes := total - base64 - confusable
 	var parts []string
-	if rune > 0 {
-		label := "match"
-		if rune != 1 {
-			label = "matches"
-		}
-		parts = append(parts, fmt.Sprintf("%d %s", rune, label))
+	if runes > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", runes, plural(runes, "match", "matches")))
 	}
 	if base64 > 0 {
 		parts = append(parts, fmt.Sprintf("%d base64", base64))
 	}
 	if confusable > 0 {
-		parts = append(parts, fmt.Sprintf("%d confusable", confusable))
+		parts = append(parts, fmt.Sprintf("%d %s", confusable, plural(confusable, "confusable", "confusables")))
 	}
 	return strings.Join(parts, " + ")
 }

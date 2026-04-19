@@ -888,6 +888,33 @@ func TestAllowHint(t *testing.T) {
 	})
 }
 
+// --- summarizeCounts pluralization --------------------------------------
+
+func TestSummarizeCountsPlural(t *testing.T) {
+	tests := []struct {
+		name                       string
+		total, base64, confusables int
+		want                       string
+	}{
+		{"single match", 1, 0, 0, "1 match"},
+		{"multiple matches", 3, 0, 0, "3 matches"},
+		{"single confusable", 1, 0, 1, "1 confusable"},
+		{"multiple confusables", 5, 0, 5, "5 confusables"},
+		{"single base64 stays uninflected", 1, 1, 0, "1 base64"},
+		{"multiple base64 stays uninflected", 7, 7, 0, "7 base64"},
+		{"mixed singulars", 3, 1, 1, "1 match + 1 base64 + 1 confusable"},
+		{"mixed plurals", 9, 3, 3, "3 matches + 3 base64 + 3 confusables"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := summarizeCounts(tt.total, tt.base64, tt.confusables)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // --- runeDescription -----------------------------------------------------
 
 func TestRuneDescription(t *testing.T) {
